@@ -1,5 +1,28 @@
 name: local-llm-polished
-version: 0.1.0
-description: Local faster-whisper STT provider with an optional LLM transcript polish step.
+version: 0.2.0
+description: >-
+  Local STT with two interchangeable backends (faster-whisper or sherpa-onnx
+  Parakeet V3), long-audio chunking, and an optional bounded LLM post-processing
+  pass over the raw transcript.
 provides_transcription_providers:
   - local_llm_polished
+
+# Dependencies
+#
+# The default `faster_whisper` backend adds nothing to install: it delegates to
+# the transcription stack Hermes already ships, and the post-processing pass
+# reuses Hermes' own LLM client (`agent.auxiliary_client.call_llm`).
+#
+# The `parakeet` backend is opt-in, so its packages are deliberately not
+# declared here — installing them for every user would be wrong:
+#
+#   pip install sherpa-onnx numpy      # Apache-2.0 / BSD-3-Clause
+#
+# `ffmpeg` (with `ffprobe`) must be on PATH whenever `audio_speed` is not 1.0 or
+# the parakeet backend is selected; input is normalized to 16 kHz mono PCM WAV
+# first. Matching input is passed through untouched, so the faster-whisper
+# default never shells out.
+#
+# Parakeet also needs a sherpa-onnx model export (encoder/decoder/joiner/tokens)
+# pointed at by `stt.local_llm_polished.parakeet.model_path` or
+# $HERMES_PARAKEET_MODEL_PATH. See README.md.

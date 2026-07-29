@@ -1,52 +1,46 @@
-"""Local LLM Polished STT provider for Hermes.
+"""Local multi-backend STT provider for Hermes.
 
-Registers ``local_llm_polished`` as a speech-to-text provider. It mirrors the
-built-in ``local`` faster-whisper provider (model/language config), then
-optionally sends the raw transcript through a bounded LLM polish step before
-returning it to Hermes.
+Registers ``local_llm_polished`` as a speech-to-text provider. Audio is
+transcribed locally — by Hermes' own faster-whisper path (default) or by a
+sherpa-onnx Parakeet V3 offline transducer — and the raw transcript then
+optionally goes through a bounded LLM post-processing step before it is
+returned to Hermes.
+
+    audio → [ffmpeg speed/16 kHz mono] → local ASR (+chunking) → LLM cleanup → Hermes
 """
 
 from __future__ import annotations
 
 import logging
-import time
-from typing import Any, Dict, Optional
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from agent.transcription_provider import TranscriptionProvider
 
+from . import audio, post_processing
+from .backends import (
+    BackendError,
+    SttBackend,
+    build_backend,
+    concurrency_guard,
+)
+from .config import (
+    BACKEND_PARAKEET,
+    PROVIDER_NAME,
+    ConfigError,
+    Settings,
+    load_settings,
+    load_stt_config,
+)
+
 logger = logging.getLogger(__name__)
 
-PROVIDER_NAME = "local_llm_polished"
-
-DEFAULT_PROMPT = """You are a transcript polishing step for a voice-enabled AI assistant.
-You receive raw speech-to-text output from a small, fast local ASR model.
-Produce a cleaner transcript before the assistant acts on it.
-Detect the user's language automatically and preserve it. Do not translate.
-Preserve the user's intent, tone, informality, and level of detail.
-Fix only obvious ASR/STT mistakes: broken words, punctuation, spacing, casing, homophones, and misrecognized names, acronyms, commands, or technical terms.
-When the transcript mixes languages, keep that mix and restore likely borrowed words or proper nouns in their conventional spelling.
-Use surrounding context inside the transcript to infer likely corrections, but do not invent new requests, facts, names, options, or details.
-Do not answer the user. Do not explain your changes. Return only the polished transcript text."""
-
-
-def _cfg_get(config: Dict[str, Any], *path: str, default: Any = None) -> Any:
-    cur: Any = config
-    for key in path:
-        if not isinstance(cur, dict):
-            return default
-        cur = cur.get(key)
-    return default if cur is None else cur
-
-
-def _load_stt_config() -> Dict[str, Any]:
-    try:
-        from hermes_cli.config import load_config
-
-        cfg = load_config()
-    except Exception:
-        return {}
-    stt = cfg.get("stt") if isinstance(cfg, dict) else None
-    return stt if isinstance(stt, dict) else {}
+# Roughly three words per second of speech, plus slack, bounded to keep the
+# overlap comparison cheap and conservative.
+_OVERLAP_WORDS_PER_SECOND = 3
+_MIN_OVERLAP_WORDS = 2
+_MAX_OVERLAP_WORDS = 24
 
 
 class LocalLlmPolishedProvider(TranscriptionProvider):
@@ -56,9 +50,11 @@ class LocalLlmPolishedProvider(TranscriptionProvider):
 
     @property
     def display_name(self) -> str:
-        return "Local LLM Polished STT"
+        return "Local LLM Post-Processed STT"
 
-    def list_models(self):
+    def list_models(self) -> List[Dict[str, Any]]:
+        # Model ids apply to the faster-whisper backend; the parakeet backend is
+        # selected via ``backend: parakeet`` and configured by model_path.
         return [
             {"id": "tiny", "display": "faster-whisper tiny"},
             {"id": "base", "display": "faster-whisper base"},
@@ -75,116 +71,100 @@ class LocalLlmPolishedProvider(TranscriptionProvider):
         return {
             "name": self.display_name,
             "badge": "local+LLM",
-            "tag": "Local faster-whisper plus optional LLM transcript polishing",
+            "tag": "Local faster-whisper or Parakeet V3 STT plus optional LLM post-processing",
             "env_vars": [],
         }
 
-    def _provider_config(self, stt_config: Dict[str, Any]) -> Dict[str, Any]:
-        cfg = stt_config.get(PROVIDER_NAME)
-        return cfg if isinstance(cfg, dict) else {}
-
-    def _effective_model(self, model: Optional[str], provider_cfg: Dict[str, Any], stt_config: Dict[str, Any]) -> str:
-        configured = model or provider_cfg.get("model") or _cfg_get(stt_config, "local", "model") or self.default_model()
+    def is_available(self) -> bool:
+        """Never raises — reports whether the configured backend can run."""
         try:
-            from tools.transcription_tools import _normalize_local_model
+            settings = load_settings(load_stt_config())
+            if settings.backend != BACKEND_PARAKEET:
+                return True
+            import importlib.util
 
-            return _normalize_local_model(configured)
-        except Exception:
-            return str(configured or "base")
-
-    def _effective_language(self, language: Optional[str], provider_cfg: Dict[str, Any], stt_config: Dict[str, Any]) -> Optional[str]:
-        configured = language or provider_cfg.get("language") or _cfg_get(stt_config, "local", "language")
-        try:
-            from tools.transcription_tools import _normalize_stt_language
-
-            return _normalize_stt_language(configured)
-        except Exception:
-            return str(configured).strip() if configured else None
-
-    def _transcribe_local(self, file_path: str, model_name: str, language: Optional[str]) -> Dict[str, Any]:
-        try:
-            # Reuse Hermes' local faster-whisper implementation so behavior stays
-            # close to the built-in local provider. If Hermes later starts passing
-            # language into this private helper, the fallback path below remains safe.
-            from tools.transcription_tools import _transcribe_local
-
-            result = _transcribe_local(file_path, model_name)
+            if importlib.util.find_spec("sherpa_onnx") is None:
+                return False
+            settings.parakeet.resolve_files()
+            return True
         except Exception as exc:
-            logger.warning("local_llm_polished local transcription failed: %s", exc)
-            return {
-                "success": False,
-                "transcript": "",
-                "provider": PROVIDER_NAME,
-                "error": f"Local transcription failed: {exc}",
-            }
+            logger.debug("%s availability check failed: %s", PROVIDER_NAME, exc)
+            return False
 
-        if isinstance(result, dict):
-            result = dict(result)
-            result.setdefault("provider", PROVIDER_NAME)
-            # Preserve compatibility if the built-in reports provider='local', but
-            # mark this provider as the one that serviced the Hermes request.
-            result["provider"] = PROVIDER_NAME
-            return result
-        return {
+    # ------------------------------------------------------------------
+    # ASR
+    # ------------------------------------------------------------------
+
+    def _target_sample_rate(self, settings: Settings) -> int:
+        if settings.backend == BACKEND_PARAKEET:
+            return settings.parakeet.sample_rate
+        return audio.TARGET_SAMPLE_RATE
+
+    def _transcribe_chunked(
+        self,
+        backend: SttBackend,
+        wav_path: str,
+        duration_seconds: float,
+        settings: Settings,
+    ) -> tuple[str, int]:
+        chunking = settings.chunking
+        chunks = audio.plan_chunks(duration_seconds, chunking.chunk_seconds, chunking.overlap_seconds)
+        logger.info(
+            "%s: decoding %.1fs of audio in %d chunks of %.0fs (overlap %.1fs)",
+            PROVIDER_NAME, duration_seconds, len(chunks), chunking.chunk_seconds, chunking.overlap_seconds,
+        )
+        texts: List[str] = []
+        for index, (start, length) in enumerate(chunks, start=1):
+            samples, sample_rate = audio.read_wave_window(wav_path, start, length)
+            texts.append(backend.transcribe_samples(samples, sample_rate))
+            logger.debug("%s: chunk %d/%d decoded", PROVIDER_NAME, index, len(chunks))
+        max_overlap_words = min(
+            _MAX_OVERLAP_WORDS,
+            max(_MIN_OVERLAP_WORDS, int(chunking.overlap_seconds * _OVERLAP_WORDS_PER_SECOND) + 2),
+        )
+        return audio.merge_transcripts(texts, max_overlap_words), len(chunks)
+
+    def _run_asr(self, file_path: str, settings: Settings) -> tuple[str, int]:
+        """Return ``(transcript, chunk_count)``; raises on failure."""
+        backend = build_backend(settings)
+        needs_wav = backend.requires_wav or abs(settings.audio_speed - 1.0) >= 1e-6
+
+        with tempfile.TemporaryDirectory(prefix="hermes-stt-") as work_dir:
+            wav_path = file_path
+            if needs_wav:
+                wav_path = audio.prepare_wav(
+                    file_path,
+                    work_dir,
+                    speed=settings.audio_speed,
+                    sample_rate=self._target_sample_rate(settings),
+                )
+
+            with concurrency_guard(backend.max_concurrency):
+                if backend.supports_chunking and settings.chunking.enabled:
+                    duration = audio.probe_duration_seconds(wav_path)
+                    if duration is None:
+                        logger.warning(
+                            "%s: could not determine the duration of %s — decoding in one pass.",
+                            PROVIDER_NAME, Path(file_path).name,
+                        )
+                    elif duration > settings.chunking.threshold_seconds:
+                        return self._transcribe_chunked(backend, wav_path, duration, settings)
+                return backend.transcribe_file(wav_path, settings.language), 1
+
+    # ------------------------------------------------------------------
+    # Provider entry point
+    # ------------------------------------------------------------------
+
+    def _error(self, message: str, settings: Optional[Settings] = None) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
             "success": False,
             "transcript": "",
             "provider": PROVIDER_NAME,
-            "error": "Local transcription returned an invalid result.",
+            "error": message,
         }
-
-    def _polish_enabled(self, polish_cfg: Dict[str, Any]) -> bool:
-        enabled = polish_cfg.get("enabled", True)
-        if isinstance(enabled, bool):
-            return enabled
-        return str(enabled).strip().lower() not in {"0", "false", "no", "off"}
-
-    def _polish(self, transcript: str, polish_cfg: Dict[str, Any]) -> str:
-        raw = (transcript or "").strip()
-        if not raw or not self._polish_enabled(polish_cfg):
-            return transcript
-
-        provider = polish_cfg.get("provider") or None
-        if provider == "default":
-            provider = "main"
-        model = polish_cfg.get("model") or None
-        timeout = polish_cfg.get("timeout", 60)
-        try:
-            timeout = float(timeout)
-        except Exception:
-            timeout = 60.0
-
-        prompt = str(polish_cfg.get("prompt") or "").strip() or DEFAULT_PROMPT
-        effort = str(polish_cfg.get("reasoning_effort") or "low").strip().lower()
-        extra_body = dict(polish_cfg.get("extra_body") or {})
-        if effort:
-            extra_body.setdefault("reasoning", {"enabled": True, "effort": effort})
-
-        messages = [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": "Polish this transcript only:\n\n" + raw},
-        ]
-
-        try:
-            from agent.auxiliary_client import call_llm
-
-            started = time.monotonic()
-            response = call_llm(
-                task="stt_polish",
-                provider=provider,
-                model=model,
-                messages=messages,
-                temperature=0,
-                max_tokens=None,
-                timeout=timeout,
-                extra_body=extra_body,
-            )
-            polished = (response.choices[0].message.content or "").strip()
-            if polished:
-                logger.info("local_llm_polished polished transcript in %.2fs", time.monotonic() - started)
-                return polished
-        except Exception as exc:
-            logger.warning("local_llm_polished polish failed; keeping raw transcript: %s", exc)
-        return transcript
+        if settings is not None:
+            result["backend"] = settings.backend
+        return result
 
     def transcribe(
         self,
@@ -194,26 +174,37 @@ class LocalLlmPolishedProvider(TranscriptionProvider):
         language: Optional[str] = None,
         **extra: Any,
     ) -> Dict[str, Any]:
-        stt_config = _load_stt_config()
-        provider_cfg = self._provider_config(stt_config)
-        model_name = self._effective_model(model, provider_cfg, stt_config)
-        lang = self._effective_language(language, provider_cfg, stt_config)
+        try:
+            settings = load_settings(load_stt_config(), model=model, language=language)
+        except Exception as exc:
+            logger.error("%s: invalid configuration: %s", PROVIDER_NAME, exc)
+            return self._error(f"Invalid {PROVIDER_NAME} configuration: {exc}")
 
-        result = self._transcribe_local(file_path, model_name, lang)
-        if not result.get("success"):
-            return result
+        try:
+            raw, chunk_count = self._run_asr(file_path, settings)
+        except (BackendError, audio.AudioError, ConfigError) as exc:
+            logger.error("%s: %s backend failed: %s", PROVIDER_NAME, settings.backend, exc)
+            return self._error(f"{settings.backend} transcription failed: {exc}", settings)
+        except Exception as exc:  # defensive: the ABC forbids raising
+            logger.error("%s: unexpected failure: %s", PROVIDER_NAME, exc, exc_info=True)
+            return self._error(f"{settings.backend} transcription failed: {exc}", settings)
 
-        raw = result.get("transcript") or ""
-        polish_cfg = provider_cfg.get("polish")
-        if not isinstance(polish_cfg, dict):
-            # Back-compat with the earlier prototype config name.
-            polish_cfg = provider_cfg.get("repair")
-        if not isinstance(polish_cfg, dict):
-            polish_cfg = {}
-        result["transcript"] = self._polish(raw, polish_cfg)
-        result["provider"] = PROVIDER_NAME
-        if lang:
-            result.setdefault("language", lang)
+        transcript, post_error = post_processing.apply(raw, settings.post_processing)
+        result: Dict[str, Any] = {
+            "success": True,
+            "transcript": transcript,
+            "provider": PROVIDER_NAME,
+            "backend": settings.backend,
+            "audio_speed": settings.audio_speed,
+            "chunks": chunk_count,
+            "post_processing_applied": bool(
+                transcript != raw and post_error is None and post_processing.is_enabled(settings.post_processing)
+            ),
+        }
+        if post_error:
+            result["post_processing_error"] = post_error
+        if settings.language:
+            result["language"] = settings.language
         return result
 
 

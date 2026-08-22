@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from agent.transcription_provider import TranscriptionProvider
 
-from . import audio, post_processing
+from . import audio, post_processing, runtime_deps
 from .backends import (
     BackendError,
     SttBackend,
@@ -76,19 +76,26 @@ class LocalLlmPolishedProvider(TranscriptionProvider):
         }
 
     def is_available(self) -> bool:
-        """Never raises — reports whether the configured backend can run."""
+        """Never raises — reports whether the configured backend can run.
+
+        Hermes returns an "STT plugin is not available" envelope instead of
+        calling ``transcribe`` when this is False, so a missing optional
+        package that first use would install must not report False here — see
+        ``runtime_deps.can_provide``. Missing *model files* still do: no
+        install path fixes those.
+        """
         try:
             settings = load_settings(load_stt_config())
             if settings.backend != BACKEND_PARAKEET:
                 return True
-            import importlib.util
-
-            if importlib.util.find_spec("sherpa_onnx") is None:
+            if not runtime_deps.can_provide(
+                auto_install=settings.parakeet.auto_install_deps
+            ):
                 return False
             settings.parakeet.resolve_files()
             return True
         except Exception as exc:
-            logger.debug("%s availability check failed: %s", PROVIDER_NAME, exc)
+            logger.warning("%s availability check failed: %s", PROVIDER_NAME, exc)
             return False
 
     # ------------------------------------------------------------------

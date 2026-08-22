@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -148,13 +149,49 @@ def test_parakeet_is_available_with_sherpa_and_a_model(
     assert provider.is_available() is True
 
 
-def test_parakeet_is_unavailable_without_sherpa_onnx(
-    provider, hermes_config, parakeet_model_dir, monkeypatch
+def test_parakeet_is_unavailable_when_the_runtime_cannot_be_provided(
+    provider, hermes_config, parakeet_model_dir, no_sherpa, install_gate
 ):
-    monkeypatch.setitem(sys.modules, "sherpa_onnx", None)
+    # Runtime installs turned off and no plugin runtime on disk.
+    install_gate(allow=False)
     hermes_config(_parakeet_config(parakeet_model_dir))
 
     assert provider.is_available() is False
+
+
+def test_parakeet_stays_available_when_the_runtime_can_be_provisioned(
+    provider, hermes_config, parakeet_model_dir, no_sherpa, install_gate,
+    runtime_deps_mod, monkeypatch
+):
+    """The production regression, at the provider surface.
+
+    Hermes short-circuits with "STT plugin is not available" *before* calling
+    ``transcribe``. Reporting False for a dependency first use would provision
+    is what turned a venv rebuild into a dead voice pipeline.
+    """
+    install_gate()
+    installs = []
+    monkeypatch.setattr(
+        runtime_deps_mod, "install_runtime",
+        lambda lock=None: installs.append(lock) or Path("/unused"),
+    )
+    hermes_config(_parakeet_config(parakeet_model_dir))
+
+    assert provider.is_available() is True
+    assert installs == [], "availability probing must not install"
+
+
+def test_availability_defers_to_the_runtime_probe(
+    provider, hermes_config, parakeet_model_dir, runtime_deps_mod, monkeypatch
+):
+    hermes_config(_parakeet_config(parakeet_model_dir))
+    monkeypatch.setattr(runtime_deps_mod, "can_provide", lambda **kwargs: False)
+
+    assert provider.is_available() is False
+
+    monkeypatch.setattr(runtime_deps_mod, "can_provide", lambda **kwargs: True)
+
+    assert provider.is_available() is True
 
 
 def test_parakeet_is_unavailable_without_model_files(
@@ -400,6 +437,46 @@ def test_parakeet_single_pass(
     assert result["chunks"] == 1
     assert result["audio_speed"] == 1.0
     assert len(recorder["decoded"]) == 1
+
+
+def test_parakeet_heals_a_rebuilt_venv_on_the_next_voice_message(
+    provider, hermes_config, parakeet_model_dir, no_sherpa, runtime_deps_mod,
+    fake_sherpa, install_gate, make_wav, monkeypatch
+):
+    """End-to-end version of the outage: deps gone, one voice message, working STT."""
+    install_gate()
+    provisioned = []
+
+    def _ensure(*, auto_install, lock=None):
+        provisioned.append(auto_install)
+        fake_sherpa(lambda stream: "parakeet transcript")
+        return "installed"
+
+    monkeypatch.setattr(runtime_deps_mod, "ensure", _ensure)
+    hermes_config(_parakeet_config(parakeet_model_dir, post_processing={"enabled": False}))
+
+    assert provider.is_available() is True
+    result = provider.transcribe(str(make_wav(seconds=2.0)))
+
+    assert result["success"] is True
+    assert result["transcript"] == "parakeet transcript"
+    assert provisioned == [True]
+
+
+def test_parakeet_missing_deps_return_an_actionable_error_envelope(
+    provider, hermes_config, parakeet_model_dir, no_sherpa, install_gate,
+    runtime_deps_mod, make_wav
+):
+    install_gate(allow=False)
+    hermes_config(_parakeet_config(parakeet_model_dir))
+
+    result = provider.transcribe(str(make_wav(seconds=2.0)))
+
+    assert result["success"] is False
+    assert result["backend"] == "parakeet"
+    # The envelope reaches the user as the STT failure message, so it has to
+    # carry the fix rather than a generic "dependencies are not configured".
+    assert runtime_deps_mod.manual_install_command() in result["error"]
 
 
 def test_parakeet_chunks_long_audio_and_merges_the_result(

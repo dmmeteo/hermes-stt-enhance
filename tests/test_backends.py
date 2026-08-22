@@ -209,8 +209,68 @@ def test_parakeet_without_sherpa_onnx_explains_the_install(
     monkeypatch.setitem(sys.modules, "sherpa_onnx", None)
     backend = backends_mod.build_backend(_parakeet_settings(config_mod, parakeet_model_dir))
 
-    with pytest.raises(backends_mod.BackendError, match="pip install sherpa-onnx"):
+    with pytest.raises(backends_mod.BackendError, match="pip install"):
         backend.transcribe_samples([0.0] * 10, 16000)
+
+
+def test_parakeet_provisions_its_runtime_before_loading_the_model(
+    backends_mod, runtime_deps_mod, config_mod, parakeet_model_dir, no_sherpa,
+    fake_sherpa, monkeypatch
+):
+    """A rebuilt Hermes venv heals itself on the next voice message."""
+    calls = []
+
+    def _ensure(*, auto_install, lock=None):
+        calls.append(auto_install)
+        fake_sherpa(lambda stream: "healed")  # what a provisioned runtime gives us
+        return "installed"
+
+    monkeypatch.setattr(runtime_deps_mod, "ensure", _ensure)
+    backend = backends_mod.build_backend(_parakeet_settings(config_mod, parakeet_model_dir))
+
+    assert backend.transcribe_samples([0.0] * 10, 16000) == "healed"
+    assert calls == [True]
+
+
+def test_parakeet_dependency_failure_names_the_provisioning_command(
+    backends_mod, runtime_deps_mod, config_mod, parakeet_model_dir, no_sherpa,
+    install_gate
+):
+    install_gate(allow=False)
+    backend = backends_mod.build_backend(_parakeet_settings(config_mod, parakeet_model_dir))
+
+    with pytest.raises(backends_mod.BackendError) as exc:
+        backend.transcribe_samples([0.0] * 10, 16000)
+
+    assert runtime_deps_mod.manual_install_command() in str(exc.value)
+    assert "--target" in str(exc.value)
+
+
+def test_parakeet_passes_the_auto_install_setting_through(
+    backends_mod, runtime_deps_mod, config_mod, parakeet_model_dir, no_sherpa,
+    monkeypatch
+):
+    calls = []
+
+    def _ensure(*, auto_install, lock=None):
+        calls.append(auto_install)
+        raise runtime_deps_mod.DependencyError("auto_install_deps is false")
+
+    monkeypatch.setattr(runtime_deps_mod, "ensure", _ensure)
+    settings = config_mod.load_settings({
+        "local_llm_polished": {
+            "backend": "parakeet",
+            "parakeet": {
+                "model_path": str(parakeet_model_dir),
+                "auto_install_deps": False,
+            },
+        }
+    })
+    backend = backends_mod.build_backend(settings)
+
+    with pytest.raises(backends_mod.BackendError, match="auto_install_deps"):
+        backend.transcribe_samples([0.0] * 10, 16000)
+    assert calls == [False]
 
 
 def test_parakeet_reports_a_model_load_failure(

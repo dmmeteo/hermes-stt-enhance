@@ -30,7 +30,7 @@ This plugin keeps transcription local, then runs a short, bounded LLM cleanup pa
 | | `faster_whisper` (default) | `parakeet` |
 |---|---|---|
 | Engine | Hermes' own faster-whisper path | sherpa-onnx offline transducer (NVIDIA Parakeet TDT 0.6B v3, INT8) |
-| Extra install | none | `sherpa-onnx`, `numpy`, model export |
+| Extra install | none | model export; `sherpa-onnx` + `numpy` provision themselves at first use |
 | Input | file handed straight to Hermes | 16 kHz mono PCM WAV (ffmpeg) |
 | Long audio | handled internally by faster-whisper | overlapping chunks (see [Chunking](#chunking)) |
 | Default `audio_speed` | `1.0` | `1.25` |
@@ -99,16 +99,55 @@ hermes gateway restart      # hermes -p developer gateway restart for a profile
 
 **Only for the `parakeet` backend**
 
-```bash
-pip install sherpa-onnx numpy
-```
+`sherpa-onnx==1.13.4` and `numpy==2.4.3` are provisioned for you the first time
+a voice message reaches the parakeet backend — into a plugin-owned directory,
+not into Hermes' venv. Nothing to install by hand; see
+[Dependencies live outside Hermes' venv](#dependencies-live-outside-hermes-venv).
 
 - `ffmpeg` + `ffprobe` on PATH — also required for any backend when `audio_speed != 1.0`. Hermes' own binary lookup (Homebrew prefixes etc.) is preferred, with a `PATH` fallback. Audio that is already 16 kHz mono at `audio_speed: 1.0` is passed through untouched, so the default configuration never shells out.
 - a sherpa-onnx Parakeet export containing `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, `tokens.txt` (the non-int8 `*.onnx` names are accepted too).
 
 All optional dependencies are permissively licensed (sherpa-onnx: Apache-2.0, numpy: BSD-3-Clause) — no copyleft (GPL/AGPL) packages are pulled in.
 
-`is_available()` reports `False` (never raises) when the selected backend cannot run — missing `sherpa_onnx`, missing model directory, or unreadable model files.
+`is_available()` reports `False` (never raises) when the selected backend cannot run and the plugin cannot fix it — a missing model directory, unreadable model files, or a dependency runtime that is absent and not allowed to be provisioned. A missing package that *can* be provisioned keeps the provider available, because Hermes returns "STT plugin is not available" instead of calling the provider at all.
+
+## Dependencies live outside Hermes' venv
+
+A Hermes update can recreate the agent venv from `pyproject.toml`, which wipes anything that was installed lazily into it — `sherpa-onnx` and `numpy` among them. Hermes' repair pass cannot fix that: it decides what to reinstall by checking what is still installed, and after a rebuild nothing is. So the packages stay gone and STT fails with a generic "STT plugin is not available".
+
+The parakeet backend therefore keeps its dependencies in a directory of its own, outside the venv, named after the interpreter ABI and a digest of the exact pinned lock:
+
+```
+~/.hermes/plugin-runtimes/local-llm-polished/cpython-311-linux-x86_64-d258e225fdb6/
+```
+
+| Event | What it costs you |
+|---|---|
+| First use | One slow voice message while the runtime is provisioned |
+| **Hermes update / venv rebuild** | Nothing — the directory is not in the venv |
+| Dependency or Python upgrade | One install into a clean new directory; the old one is kept |
+| Offline when an upgrade is due | Nothing — the previous runtime keeps working |
+| Several profiles | One shared install, not one per profile |
+
+The directory is appended to `sys.path`, never prepended, so anything Hermes core ships wins every name collision — a plugin dependency cannot shadow or break Hermes itself. If the packages are already importable, the plugin uses those and provisions nothing.
+
+Optional, for pre-seeding an air-gapped or image-baked install, or for checking what an update did:
+
+```bash
+~/.hermes/hermes-agent/venv/bin/python scripts/plugin_runtime.py --status
+~/.hermes/hermes-agent/venv/bin/python scripts/plugin_runtime.py --install
+```
+
+To freeze the environment instead — an already-provisioned runtime keeps working, nothing new is ever installed:
+
+```yaml
+stt:
+  local_llm_polished:
+    parakeet:
+      auto_install_deps: false
+```
+
+Hermes-wide, `security.allow_lazy_installs: false` has the same effect. Full design, integrity model, and air-gapped instructions: [docs/dependency-model.md](docs/dependency-model.md). The gap in Hermes' own plugin API and a proposal to close it: [docs/hermes-core-proposal.md](docs/hermes-core-proposal.md).
 
 ## Parakeet setup
 
@@ -134,6 +173,7 @@ Individual files can also be pointed at directly (`encoder:`, `decoder:`, `joine
 
 | Key | Default | Notes |
 |---|---|---|
+| `auto_install_deps` | `true` | provision the dependency runtime at first use — see [above](#dependencies-live-outside-hermes-venv) |
 | `num_threads` | `6` | ONNX intra-op threads |
 | `max_concurrency` | `1` | see [Concurrency](#concurrency) |
 | `audio_speed` | `1.25` | overrides the shared `audio_speed` for this backend |

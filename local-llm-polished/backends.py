@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple
 
-from . import audio
+from . import audio, runtime_deps
 from .config import (
     BACKEND_FASTER_WHISPER,
     BACKEND_PARAKEET,
@@ -132,12 +132,20 @@ class ParakeetBackend(SttBackend):
             if cached is not None:
                 return cached
 
+            # First-import path: this is where Hermes' own backends make sure
+            # their lazily-installed packages exist, so a venv rebuild costs
+            # one slow voice message instead of a dead STT pipeline.
+            try:
+                runtime_deps.ensure(auto_install=self.cfg.auto_install_deps)
+            except runtime_deps.DependencyError as exc:
+                raise BackendError(str(exc)) from exc
+
             try:
                 import sherpa_onnx
             except ImportError as exc:
                 raise BackendError(
-                    "The parakeet backend needs sherpa-onnx. Install it with "
-                    "'pip install sherpa-onnx numpy'."
+                    f"The parakeet backend needs sherpa-onnx: {exc}. "
+                    f"Install it with: {runtime_deps.manual_install_command()}"
                 ) from exc
 
             logger.info(

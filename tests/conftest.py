@@ -168,6 +168,11 @@ def post_processing_mod():
     return sys.modules[f"{MODULE_NAME}.post_processing"]
 
 
+@pytest.fixture
+def runtime_deps_mod():
+    return sys.modules[f"{MODULE_NAME}.runtime_deps"]
+
+
 @pytest.fixture(autouse=True)
 def _reset_backend_caches():
     backends = sys.modules[f"{MODULE_NAME}.backends"]
@@ -276,6 +281,139 @@ def fake_sherpa(monkeypatch):
         return recorder
 
     return _set
+
+
+@pytest.fixture
+def no_sherpa(monkeypatch):
+    """Make ``sherpa_onnx`` unimportable, the way a rebuilt venv leaves it."""
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", None)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Plugin-owned dependency runtime
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def install_gate(monkeypatch):
+    """Stand in for Hermes' ``security.allow_lazy_installs`` gate."""
+
+    def _set(allow=True):
+        module = _make_module("tools.lazy_deps", _allow_lazy_installs=lambda: allow)
+        monkeypatch.setitem(sys.modules, "tools.lazy_deps", module)
+        # ``from tools import lazy_deps`` may otherwise return a package
+        # attribute cached by a real Hermes import before this fixture ran.
+        monkeypatch.setattr(sys.modules["tools"], "lazy_deps", module, raising=False)
+        return module
+
+    return _set
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_path(monkeypatch, tmp_path_factory):
+    """Keep runtime activation from leaking between tests.
+
+    Each test gets its own runtime root, and any ``sys.path`` entry or module
+    a test's runtime activated is removed afterwards — otherwise a package
+    installed by one test would satisfy the next one's probe.
+    """
+    root = tmp_path_factory.mktemp("plugin-runtimes")
+    monkeypatch.setenv("HERMES_LLM_POLISHED_RUNTIME_ROOT", str(root))
+    before_path = list(sys.path)
+    before_modules = set(sys.modules)
+    yield root
+    sys.path[:] = before_path
+    for name in set(sys.modules) - before_modules:
+        # Faux dependency modules imported from a test runtime.
+        if name.startswith("faux"):
+            sys.modules.pop(name, None)
+    import importlib
+
+    importlib.invalidate_caches()
+
+
+@pytest.fixture
+def faux_lock(runtime_deps_mod, monkeypatch):
+    """Swap the real pins for faux packages the fake installer can materialize.
+
+    Using names that genuinely do not exist keeps the tests honest: activation
+    and imports are real, not simulated with ``sys.modules`` sentinels.
+    """
+
+    def _set(*, asr_version="1.0.0", numeric_version="2.0.0"):
+        lock = (
+            runtime_deps_mod.Requirement("faux-asr", asr_version, "faux_asr"),
+            runtime_deps_mod.Requirement("faux-numeric", numeric_version, "faux_numeric"),
+        )
+        monkeypatch.setattr(runtime_deps_mod, "DEPENDENCY_LOCK", lock)
+        monkeypatch.setattr(runtime_deps_mod, "REQUIRED_IMPORTS", ("faux_asr",))
+        return lock
+
+    return _set
+
+
+@pytest.fixture
+def fake_installer(runtime_deps_mod, monkeypatch):
+    """Replace the pip/uv subprocess with one that materializes real files.
+
+    The staged directory ends up holding importable modules and ``dist-info``
+    metadata, so version verification and ``sys.path`` activation exercise the
+    same code paths a real install would.
+    """
+    recorder = {"calls": []}
+
+    def _set(*, ok=True, output="", versions=None, before=None):
+        def _run_installer(stage, specs, timeout):
+            recorder["calls"].append(
+                {"stage": Path(stage), "specs": tuple(specs), "timeout": timeout}
+            )
+            if before is not None:
+                before(Path(stage), tuple(specs))
+            if not ok:
+                return False, output or "installer failed"
+            for spec in specs:
+                dist, _, version = spec.partition("==")
+                version = (versions or {}).get(dist, version)
+                module = dist.replace("-", "_")
+                stage_path = Path(stage)
+                stage_path.mkdir(parents=True, exist_ok=True)
+                (stage_path / f"{module}.py").write_text(
+                    f'__version__ = "{version}"\n', encoding="utf-8"
+                )
+                dist_info = stage_path / f"{module}-{version}.dist-info"
+                dist_info.mkdir(parents=True, exist_ok=True)
+                (dist_info / "METADATA").write_text(
+                    f"Metadata-Version: 2.1\nName: {dist}\nVersion: {version}\n",
+                    encoding="utf-8",
+                )
+            return True, output or "installed"
+
+        monkeypatch.setattr(runtime_deps_mod, "_run_installer", _run_installer)
+        return recorder
+
+    return _set
+
+
+@pytest.fixture
+def restart_process(runtime_deps_mod):
+    """Simulate the next Hermes process: nothing activated, nothing imported.
+
+    What survives is exactly what is on disk — which is the whole point of a
+    runtime that lives outside the venv.
+    """
+
+    def _restart():
+        import importlib
+
+        root = str(runtime_deps_mod.runtime_root())
+        sys.path[:] = [entry for entry in sys.path if not str(entry).startswith(root)]
+        for name in list(sys.modules):
+            if name.startswith("faux"):
+                del sys.modules[name]
+        importlib.invalidate_caches()
+
+    return _restart
 
 
 @pytest.fixture

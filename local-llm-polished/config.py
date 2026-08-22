@@ -199,6 +199,10 @@ class ParakeetConfig:
     sample_rate: int = DEFAULT_PARAKEET_SAMPLE_RATE
     feature_dim: int = DEFAULT_PARAKEET_FEATURE_DIM
     max_concurrency: int = DEFAULT_PARAKEET_MAX_CONCURRENCY
+    # sherpa-onnx is installed lazily, so a Hermes venv rebuild wipes it.
+    # Reinstalling it on first use (through Hermes' own gated installer) is
+    # the default; set false to keep the environment strictly frozen.
+    auto_install_deps: bool = True
 
     @classmethod
     def from_dict(cls, raw: Any) -> "ParakeetConfig":
@@ -222,6 +226,7 @@ class ParakeetConfig:
                 1,
                 _as_int(cfg.get("max_concurrency"), defaults.max_concurrency, label="parakeet.max_concurrency"),
             ),
+            auto_install_deps=_as_bool(cfg.get("auto_install_deps"), defaults.auto_install_deps),
         )
 
     def resolve_files(self) -> Dict[str, str]:

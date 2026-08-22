@@ -1,5 +1,5 @@
 name: local-llm-polished
-version: 0.2.0
+version: 0.3.0
 description: >-
   Local STT with two interchangeable backends (faster-whisper or sherpa-onnx
   Parakeet V3), long-audio chunking, and an optional bounded LLM post-processing
@@ -13,10 +13,28 @@ provides_transcription_providers:
 # the transcription stack Hermes already ships, and the post-processing pass
 # reuses Hermes' own LLM client (`agent.auxiliary_client.call_llm`).
 #
-# The `parakeet` backend is opt-in, so its packages are deliberately not
-# declared here — installing them for every user would be wrong:
+# The `parakeet` backend is opt-in and owns its dependencies itself. They are
+# deliberately NOT declared in `python_dependencies`: that field is warn-only
+# (Hermes never installs from it) and would warn on every faster-whisper
+# install about packages it does not need.
 #
-#   pip install sherpa-onnx numpy      # Apache-2.0 / BSD-3-Clause
+# Instead the backend keeps them in a plugin-owned runtime directory OUTSIDE
+# Hermes' venv, provisioned on first use and addressed by interpreter ABI plus
+# a digest of the exact pinned lock:
+#
+#   ~/.hermes/plugin-runtimes/local-llm-polished/<env-tag>-<lock-digest>/
+#
+# A Hermes venv rebuild cannot wipe it, upgrades install into a clean
+# directory, the previous one stays for rollback, and every profile on the
+# machine shares one copy. See runtime_deps.py and docs/dependency-model.md.
+#
+# Pins (Apache-2.0 / BSD-3-Clause, no copyleft): sherpa-onnx==1.13.4,
+# numpy==2.4.3. Provision or inspect by hand with:
+#
+#   python scripts/plugin_runtime.py --status|--install|--verify
+#
+# Opt out of first-use provisioning with
+# `stt.local_llm_polished.parakeet.auto_install_deps: false`.
 #
 # `ffmpeg` (with `ffprobe`) must be on PATH whenever `audio_speed` is not 1.0 or
 # the parakeet backend is selected; input is normalized to 16 kHz mono PCM WAV

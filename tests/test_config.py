@@ -95,6 +95,22 @@ def test_parakeet_backend_defaults(config_mod):
     assert settings.parakeet.sample_rate == 16000
     assert settings.parakeet.feature_dim == 80
     assert settings.parakeet.max_concurrency == 1
+    # Optional deps heal themselves after a Hermes venv rebuild unless the
+    # user opts out.
+    assert settings.parakeet.auto_install_deps is True
+
+
+def test_parakeet_auto_install_deps_can_be_disabled(config_mod):
+    settings = config_mod.load_settings(
+        {
+            "local_llm_polished": {
+                "backend": "parakeet",
+                "parakeet": {"auto_install_deps": False},
+            }
+        }
+    )
+
+    assert settings.parakeet.auto_install_deps is False
 
 
 def test_audio_speed_overrides_and_precedence(config_mod):

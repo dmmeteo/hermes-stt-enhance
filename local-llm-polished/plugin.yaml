@@ -1,5 +1,6 @@
 name: local-llm-polished
-version: 0.3.0
+version: 0.3.1
+requires_hermes: ">=0.15.0"
 description: >-
   Local STT with two interchangeable backends (faster-whisper or sherpa-onnx
   Parakeet V3), long-audio chunking, and an optional bounded LLM post-processing

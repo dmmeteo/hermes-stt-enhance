@@ -70,7 +70,7 @@ def test_default_call_parameters(post_processing_mod, call_llm):
     post_processing_mod.apply("hello", {})
 
     kwargs = calls[0]
-    assert kwargs["task"] == "stt_polish"
+    assert kwargs["task"] == "stt_enhance"
     assert kwargs["provider"] is None
     assert kwargs["model"] is None
     assert kwargs["temperature"] == 0

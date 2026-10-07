@@ -1,6 +1,6 @@
 """Local multi-backend STT provider for Hermes.
 
-Registers ``local_llm_polished`` as a speech-to-text provider. Audio is
+Registers ``stt_enhance`` as a speech-to-text provider. Audio is
 transcribed locally — by Hermes' own faster-whisper path (default) or by a
 sherpa-onnx Parakeet V3 offline transducer — and the raw transcript then
 optionally goes through a bounded LLM post-processing step before it is
@@ -43,14 +43,14 @@ _MIN_OVERLAP_WORDS = 2
 _MAX_OVERLAP_WORDS = 24
 
 
-class LocalLlmPolishedProvider(TranscriptionProvider):
+class SttEnhanceProvider(TranscriptionProvider):
     @property
     def name(self) -> str:
         return PROVIDER_NAME
 
     @property
     def display_name(self) -> str:
-        return "Local LLM Post-Processed STT"
+        return "STT Enhance"
 
     def list_models(self) -> List[Dict[str, Any]]:
         # Model ids apply to the faster-whisper backend; the parakeet backend is
@@ -216,4 +216,4 @@ class LocalLlmPolishedProvider(TranscriptionProvider):
 
 
 def register(ctx):
-    ctx.register_transcription_provider(LocalLlmPolishedProvider())
+    ctx.register_transcription_provider(SttEnhanceProvider())

@@ -13,17 +13,15 @@ def test_defaults_match_the_builtin_local_provider(config_mod):
     assert settings.language is None
     assert settings.audio_speed == 1.0
     assert settings.post_processing == {}
-    assert settings.post_processing_key == ""
 
 
-def test_legacy_faster_whisper_config_still_resolves(config_mod):
-    """The 0.1.0 config shape — no backend key, ``polish`` stage."""
+def test_faster_whisper_config_without_backend_key_resolves(config_mod):
     stt = {
         "local": {"model": "small", "language": "uk"},
-        "local_llm_polished": {
+        "stt_enhance": {
             "model": "base",
             "language": "en",
-            "polish": {"enabled": True, "provider": "default", "model": "gpt-5.5"},
+            "post_processing": {"enabled": True, "provider": "default", "model": "gpt-5.5"},
         },
     }
     settings = config_mod.load_settings(stt)
@@ -32,7 +30,6 @@ def test_legacy_faster_whisper_config_still_resolves(config_mod):
     assert settings.model == "base"
     assert settings.language == "en"
     assert settings.audio_speed == 1.0
-    assert settings.post_processing_key == "polish"
     assert settings.post_processing["model"] == "gpt-5.5"
 
 
@@ -44,7 +41,7 @@ def test_stt_local_is_used_as_fallback(config_mod):
 
 
 def test_explicit_call_arguments_win(config_mod):
-    stt = {"local_llm_polished": {"model": "base", "language": "en"}}
+    stt = {"stt_enhance": {"model": "base", "language": "en"}}
     settings = config_mod.load_settings(stt, model="large-v3", language="uk")
 
     assert settings.model == "large-v3"
@@ -52,7 +49,7 @@ def test_explicit_call_arguments_win(config_mod):
 
 
 def test_cloud_model_names_fall_back_to_a_local_size(config_mod):
-    settings = config_mod.load_settings({"local_llm_polished": {"model": "whisper-1"}})
+    settings = config_mod.load_settings({"stt_enhance": {"model": "whisper-1"}})
 
     assert settings.model == "base"
 
@@ -76,14 +73,14 @@ def test_backend_aliases(config_mod, value, expected):
 
 def test_unknown_backend_falls_back_with_a_warning(config_mod, caplog):
     with caplog.at_level("WARNING"):
-        settings = config_mod.load_settings({"local_llm_polished": {"backend": "vosk"}})
+        settings = config_mod.load_settings({"stt_enhance": {"backend": "vosk"}})
 
     assert settings.backend == config_mod.BACKEND_FASTER_WHISPER
     assert "unknown backend" in caplog.text
 
 
 def test_parakeet_backend_defaults(config_mod):
-    settings = config_mod.load_settings({"local_llm_polished": {"backend": "parakeet"}})
+    settings = config_mod.load_settings({"stt_enhance": {"backend": "parakeet"}})
 
     assert settings.backend == config_mod.BACKEND_PARAKEET
     # 1.25x was the best speed/accuracy point in the benchmark.
@@ -103,7 +100,7 @@ def test_parakeet_backend_defaults(config_mod):
 def test_parakeet_auto_install_deps_can_be_disabled(config_mod):
     settings = config_mod.load_settings(
         {
-            "local_llm_polished": {
+            "stt_enhance": {
                 "backend": "parakeet",
                 "parakeet": {"auto_install_deps": False},
             }
@@ -115,13 +112,13 @@ def test_parakeet_auto_install_deps_can_be_disabled(config_mod):
 
 def test_audio_speed_overrides_and_precedence(config_mod):
     shared = config_mod.load_settings(
-        {"local_llm_polished": {"backend": "parakeet", "audio_speed": 1.0}}
+        {"stt_enhance": {"backend": "parakeet", "audio_speed": 1.0}}
     )
     assert shared.audio_speed == 1.0
 
     scoped = config_mod.load_settings(
         {
-            "local_llm_polished": {
+            "stt_enhance": {
                 "backend": "parakeet",
                 "audio_speed": 1.0,
                 "parakeet": {"audio_speed": 1.5},
@@ -131,25 +128,25 @@ def test_audio_speed_overrides_and_precedence(config_mod):
     assert scoped.audio_speed == 1.5
 
     whisper = config_mod.load_settings(
-        {"local_llm_polished": {"audio_speed": 1.25, "parakeet": {"audio_speed": 1.5}}}
+        {"stt_enhance": {"audio_speed": 1.25, "parakeet": {"audio_speed": 1.5}}}
     )
     assert whisper.audio_speed == 1.25
 
 
 def test_audio_speed_is_clamped_and_validated(config_mod, caplog):
     with caplog.at_level("WARNING"):
-        fast = config_mod.load_settings({"local_llm_polished": {"audio_speed": 9}})
+        fast = config_mod.load_settings({"stt_enhance": {"audio_speed": 9}})
     assert fast.audio_speed == config_mod.MAX_AUDIO_SPEED
     assert "audio_speed" in caplog.text
 
-    bad = config_mod.load_settings({"local_llm_polished": {"audio_speed": "quick"}})
+    bad = config_mod.load_settings({"stt_enhance": {"audio_speed": "quick"}})
     assert bad.audio_speed == 1.0
 
 
 def test_parakeet_thread_and_concurrency_overrides(config_mod):
     settings = config_mod.load_settings(
         {
-            "local_llm_polished": {
+            "stt_enhance": {
                 "backend": "parakeet",
                 "parakeet": {"num_threads": 2, "max_concurrency": 3, "provider": "cuda"},
             }
@@ -188,23 +185,11 @@ def test_chunking_can_be_disabled(config_mod):
     assert config_mod.ChunkingConfig.from_dict({"enabled": "off"}).enabled is False
 
 
-@pytest.mark.parametrize(
-    "blocks,expected_key",
-    [
-        ({"post_processing": {"model": "a"}}, "post_processing"),
-        ({"polish": {"model": "b"}}, "polish"),
-        ({"repair": {"model": "c"}}, "repair"),
-        ({"post_processing": {"model": "a"}, "polish": {"model": "b"}}, "post_processing"),
-        ({"polish": {"model": "b"}, "repair": {"model": "c"}}, "polish"),
-        ({}, ""),
-    ],
-)
-def test_post_processing_alias_precedence(config_mod, blocks, expected_key):
-    settings = config_mod.load_settings({"local_llm_polished": dict(blocks)})
+def test_only_the_post_processing_block_is_read(config_mod):
+    """Prototype stage names are migrated by scripts/migrate_config.py, not read."""
+    settings = config_mod.load_settings({"stt_enhance": {"polish": {"model": "b"}}})
 
-    assert settings.post_processing_key == expected_key
-    if expected_key:
-        assert settings.post_processing == blocks[expected_key]
+    assert settings.post_processing == {}
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +203,7 @@ def test_model_path_expands_user_and_env(config_mod, parakeet_model_dir, monkeyp
 
     for raw in ("~/parakeet-v3-int8", "$MODELS/parakeet-v3-int8"):
         settings = config_mod.load_settings(
-            {"local_llm_polished": {"backend": "parakeet", "parakeet": {"model_path": raw}}}
+            {"stt_enhance": {"backend": "parakeet", "parakeet": {"model_path": raw}}}
         )
         files = settings.parakeet.resolve_files()
         assert files["encoder"] == str(parakeet_model_dir / "encoder.int8.onnx")
@@ -228,7 +213,7 @@ def test_model_path_expands_user_and_env(config_mod, parakeet_model_dir, monkeyp
 def test_model_path_from_environment_variable(config_mod, parakeet_model_dir, monkeypatch):
     monkeypatch.setenv(config_mod.PARAKEET_MODEL_PATH_ENV, str(parakeet_model_dir))
 
-    settings = config_mod.load_settings({"local_llm_polished": {"backend": "parakeet"}})
+    settings = config_mod.load_settings({"stt_enhance": {"backend": "parakeet"}})
 
     assert settings.parakeet.resolve_files()["joiner"].endswith("joiner.int8.onnx")
 
@@ -241,7 +226,7 @@ def test_default_model_dir_candidate_is_used(config_mod, tmp_path, monkeypatch):
     for name in ("encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"):
         (model_dir / name).write_bytes(b"stub")
 
-    settings = config_mod.load_settings({"local_llm_polished": {"backend": "parakeet"}})
+    settings = config_mod.load_settings({"stt_enhance": {"backend": "parakeet"}})
 
     assert settings.parakeet.resolve_files()["encoder"] == str(model_dir / "encoder.int8.onnx")
 
@@ -279,7 +264,7 @@ def test_missing_model_path_names_the_config_key(config_mod, tmp_path, monkeypat
     with pytest.raises(config_mod.ConfigError) as excinfo:
         cfg.resolve_files()
 
-    assert "stt.local_llm_polished.parakeet.model_path" in str(excinfo.value)
+    assert "stt.stt_enhance.parakeet.model_path" in str(excinfo.value)
     assert "encoder.int8.onnx" in str(excinfo.value)
 
 

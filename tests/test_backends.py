@@ -11,7 +11,7 @@ import pytest
 def _parakeet_settings(config_mod, model_dir, **parakeet):
     return config_mod.load_settings(
         {
-            "local_llm_polished": {
+            "stt_enhance": {
                 "backend": "parakeet",
                 "parakeet": {"model_path": str(model_dir), **parakeet},
             }
@@ -258,7 +258,7 @@ def test_parakeet_passes_the_auto_install_setting_through(
 
     monkeypatch.setattr(runtime_deps_mod, "ensure", _ensure)
     settings = config_mod.load_settings({
-        "local_llm_polished": {
+        "stt_enhance": {
             "backend": "parakeet",
             "parakeet": {
                 "model_path": str(parakeet_model_dir),
@@ -289,7 +289,7 @@ def test_parakeet_config_errors_surface_as_backend_errors(
     monkeypatch.delenv(config_mod.PARAKEET_MODEL_PATH_ENV, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     backend = backends_mod.build_backend(
-        config_mod.load_settings({"local_llm_polished": {"backend": "parakeet"}})
+        config_mod.load_settings({"stt_enhance": {"backend": "parakeet"}})
     )
 
     with pytest.raises(backends_mod.BackendError, match="parakeet.model_path"):

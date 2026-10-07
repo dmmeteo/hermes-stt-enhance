@@ -1,4 +1,4 @@
-"""ASR backends for the ``local_llm_polished`` provider.
+"""ASR backends for the ``stt_enhance`` provider.
 
 Two backends share one interface:
 

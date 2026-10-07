@@ -1,12 +1,12 @@
-name: local-llm-polished
-version: 0.4.0
+name: hermes-stt-enhance
+version: 0.5.0
 requires_hermes: ">=0.15.0"
 description: >-
   Local STT with two interchangeable backends (faster-whisper or sherpa-onnx
   Parakeet V3), long-audio chunking, and an optional bounded LLM pass that
   enhances the transcript with instructions from a custom skill or prompt.
 provides_transcription_providers:
-  - local_llm_polished
+  - stt_enhance
 
 # Dependencies
 #
@@ -23,7 +23,7 @@ provides_transcription_providers:
 # Hermes' venv, provisioned on first use and addressed by interpreter ABI plus
 # a digest of the exact pinned lock:
 #
-#   ~/.hermes/plugin-runtimes/local-llm-polished/<env-tag>-<lock-digest>/
+#   ~/.hermes/plugin-runtimes/hermes-stt-enhance/<env-tag>-<lock-digest>/
 #
 # A Hermes venv rebuild cannot wipe it, upgrades install into a clean
 # directory, the previous one stays for rollback, and every profile on the
@@ -35,7 +35,7 @@ provides_transcription_providers:
 #   python scripts/plugin_runtime.py --status|--install|--verify
 #
 # Opt out of first-use provisioning with
-# `stt.local_llm_polished.parakeet.auto_install_deps: false`.
+# `stt.stt_enhance.parakeet.auto_install_deps: false`.
 #
 # `ffmpeg` (with `ffprobe`) must be on PATH whenever `audio_speed` is not 1.0 or
 # the parakeet backend is selected; input is normalized to 16 kHz mono PCM WAV
@@ -43,5 +43,5 @@ provides_transcription_providers:
 # default never shells out.
 #
 # Parakeet also needs a sherpa-onnx model export (encoder/decoder/joiner/tokens)
-# pointed at by `stt.local_llm_polished.parakeet.model_path` or
+# pointed at by `stt.stt_enhance.parakeet.model_path` or
 # $HERMES_PARAKEET_MODEL_PATH. See README.md.

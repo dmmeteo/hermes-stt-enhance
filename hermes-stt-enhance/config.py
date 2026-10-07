@@ -1,6 +1,6 @@
-"""Configuration handling for the ``local_llm_polished`` STT provider.
+"""Configuration handling for the ``stt_enhance`` STT provider.
 
-All user-facing config lives under ``stt.local_llm_polished`` in Hermes
+All user-facing config lives under ``stt.stt_enhance`` in Hermes
 ``config.yaml``. Every key is optional: an empty block keeps the historical
 behaviour (faster-whisper, ``stt.local`` fallbacks, LLM post-processing on).
 """
@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-PROVIDER_NAME = "local_llm_polished"
+PROVIDER_NAME = "stt_enhance"
 
 BACKEND_FASTER_WHISPER = "faster_whisper"
 BACKEND_PARAKEET = "parakeet"
@@ -34,10 +34,6 @@ _BACKEND_ALIASES = {
     "sherpa_onnx": BACKEND_PARAKEET,
     "sherpaonnx": BACKEND_PARAKEET,
 }
-
-# ``post_processing`` is canonical; the two prototype names stay supported.
-# Order matters — the first block present wins.
-POST_PROCESSING_KEYS: Tuple[str, ...] = ("post_processing", "polish", "repair")
 
 # faster-whisper stays at 1.0 for byte-identical behaviour with the built-in
 # ``local`` provider. Parakeet defaults to the benchmarked 1.25x recommendation.
@@ -305,8 +301,6 @@ class Settings:
     chunking: ChunkingConfig
     parakeet: ParakeetConfig
     post_processing: Dict[str, Any]
-    # Which alias supplied the post-processing block ("" when none did).
-    post_processing_key: str = ""
 
 
 def _normalize_model(configured: Any) -> str:
@@ -325,19 +319,6 @@ def _normalize_language(configured: Any) -> Optional[str]:
         return _normalize_stt_language(configured)
     except Exception:
         return str(configured).strip() if configured else None
-
-
-def _post_processing_block(provider_cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
-    for key in POST_PROCESSING_KEYS:
-        block = provider_cfg.get(key)
-        if isinstance(block, dict):
-            if key != POST_PROCESSING_KEYS[0]:
-                logger.debug(
-                    "%s: config uses legacy stage name %r — %r is canonical.",
-                    PROVIDER_NAME, key, POST_PROCESSING_KEYS[0],
-                )
-            return block, key
-    return {}, ""
 
 
 def load_settings(
@@ -364,8 +345,6 @@ def load_settings(
         )
         speed = min(max(speed, MIN_AUDIO_SPEED), MAX_AUDIO_SPEED)
 
-    post_processing, post_processing_key = _post_processing_block(provider_cfg)
-
     return Settings(
         backend=backend,
         model=_normalize_model(
@@ -377,6 +356,5 @@ def load_settings(
         audio_speed=speed,
         chunking=ChunkingConfig.from_dict(provider_cfg.get("chunking")),
         parakeet=ParakeetConfig.from_dict(parakeet_cfg),
-        post_processing=post_processing,
-        post_processing_key=post_processing_key,
+        post_processing=_as_dict(provider_cfg.get("post_processing")),
     )

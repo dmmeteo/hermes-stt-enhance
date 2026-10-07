@@ -10,12 +10,12 @@ import pytest
 
 from conftest import requires_ffmpeg
 
-PROVIDER_NAME = "local_llm_polished"
+PROVIDER_NAME = "stt_enhance"
 
 
 @pytest.fixture
 def provider(plugin):
-    return plugin.LocalLlmPolishedProvider()
+    return plugin.SttEnhanceProvider()
 
 
 class RecordingBackend:
@@ -62,7 +62,7 @@ def _parakeet_config(model_dir, **overrides):
     parakeet.update(overrides.pop("parakeet", {}))
     return {
         "stt": {
-            "local_llm_polished": {
+            "stt_enhance": {
                 "backend": "parakeet",
                 # The fixture WAVs are already 16 kHz mono, so 1.0 keeps ffmpeg
                 # out of the picture for tests that are not about resampling.
@@ -97,7 +97,7 @@ def test_provider_name_does_not_shadow_a_builtin(provider):
 def test_display_name_and_setup_schema(provider):
     schema = provider.get_setup_schema()
 
-    assert provider.display_name == "Local LLM Post-Processed STT"
+    assert provider.display_name == "STT Enhance"
     assert schema["name"] == provider.display_name
     assert schema["badge"] == "local+LLM"
     assert schema["env_vars"] == []
@@ -125,7 +125,7 @@ def test_register_hands_a_provider_instance_to_hermes(plugin):
     plugin.register(Ctx())
 
     assert len(registered) == 1
-    assert isinstance(registered[0], plugin.LocalLlmPolishedProvider)
+    assert isinstance(registered[0], plugin.SttEnhanceProvider)
     assert registered[0].name == PROVIDER_NAME
 
 
@@ -219,7 +219,7 @@ def test_is_available_never_raises(provider, plugin, monkeypatch):
 def test_default_pipeline_transcribes_and_post_processes(
     provider, hermes_config, local_whisper, call_llm
 ):
-    hermes_config({"stt": {"local_llm_polished": {"model": "base", "language": "en"}}})
+    hermes_config({"stt": {"stt_enhance": {"model": "base", "language": "en"}}})
     whisper_calls = local_whisper({"success": True, "transcript": "deploy the stage in cluster"})
     llm_calls = call_llm(reply="Deploy the staging cluster.")
 
@@ -254,7 +254,7 @@ def test_config_model_and_language_reach_the_backend(
 
 
 def test_call_arguments_override_the_config(provider, hermes_config, local_whisper, call_llm):
-    hermes_config({"stt": {"local_llm_polished": {"model": "base", "language": "en"}}})
+    hermes_config({"stt": {"stt_enhance": {"model": "base", "language": "en"}}})
     whisper_calls = local_whisper({"success": True, "transcript": "hello"})
     call_llm(reply="Hello.")
 
@@ -266,7 +266,7 @@ def test_call_arguments_override_the_config(provider, hermes_config, local_whisp
 
 def test_post_processing_can_be_disabled(provider, hermes_config, local_whisper, call_llm):
     hermes_config(
-        {"stt": {"local_llm_polished": {"post_processing": {"enabled": False}}}}
+        {"stt": {"stt_enhance": {"post_processing": {"enabled": False}}}}
     )
     local_whisper({"success": True, "transcript": "raw transcript"})
     llm_calls = call_llm()
@@ -277,20 +277,6 @@ def test_post_processing_can_be_disabled(provider, hermes_config, local_whisper,
     assert result["post_processing_applied"] is False
     assert "post_processing_error" not in result
     assert llm_calls == []
-
-
-def test_legacy_polish_block_is_honoured(provider, hermes_config, local_whisper, call_llm):
-    """0.1.0 configs used ``polish:`` — they must keep working unchanged."""
-    hermes_config(
-        {"stt": {"local_llm_polished": {"polish": {"enabled": True, "model": "gpt-5.5"}}}}
-    )
-    local_whisper({"success": True, "transcript": "raw"})
-    llm_calls = call_llm(reply="Raw.")
-
-    result = provider.transcribe("/tmp/voice.ogg")
-
-    assert result["transcript"] == "Raw."
-    assert llm_calls[0]["model"] == "gpt-5.5"
 
 
 def test_post_processing_failure_keeps_the_raw_transcript(
@@ -370,7 +356,7 @@ def test_unexpected_errors_are_converted_to_an_envelope(
 def test_audio_errors_are_converted_to_an_envelope(
     provider, hermes_config, monkeypatch, plugin, make_wav
 ):
-    hermes_config({"stt": {"local_llm_polished": {"audio_speed": 1.5}}})
+    hermes_config({"stt": {"stt_enhance": {"audio_speed": 1.5}}})
     monkeypatch.setattr(plugin.audio, "find_binary", lambda name: None)
 
     result = provider.transcribe(str(make_wav()))
@@ -389,7 +375,7 @@ def test_audio_errors_are_converted_to_an_envelope(
 def test_audio_speed_prepares_a_temporary_wav_for_faster_whisper(
     provider, hermes_config, use_backend, call_llm, make_wav, audio_mod
 ):
-    hermes_config({"stt": {"local_llm_polished": {"audio_speed": 2.0}}})
+    hermes_config({"stt": {"stt_enhance": {"audio_speed": 2.0}}})
     backend = use_backend(RecordingBackend("sped up"))
     call_llm(reply="Sped up.")
     source = make_wav(seconds=4.0)
@@ -407,7 +393,7 @@ def test_matching_input_is_passed_through_untouched(
     provider, hermes_config, use_backend, call_llm, make_wav
 ):
     hermes_config(
-        {"stt": {"local_llm_polished": {"audio_speed": 1.0, "post_processing": {"enabled": False}}}}
+        {"stt": {"stt_enhance": {"audio_speed": 1.0, "post_processing": {"enabled": False}}}}
     )
     backend = use_backend(RecordingBackend("as-is", requires_wav=True))
     call_llm()
@@ -574,7 +560,7 @@ def test_parakeet_speeds_up_and_resamples_before_decoding(
     recorder = fake_sherpa(lambda stream: "fast")
     config = _parakeet_config(parakeet_model_dir, post_processing={"enabled": False})
     # The benchmarked default: 1.25x speed-up before decoding.
-    del config["stt"]["local_llm_polished"]["audio_speed"]
+    del config["stt"]["stt_enhance"]["audio_speed"]
     hermes_config(config)
 
     result = provider.transcribe(str(make_wav(seconds=5.0)))
@@ -623,7 +609,7 @@ def test_parakeet_post_processing_runs_on_the_merged_transcript(
 def test_unloadable_skill_returns_the_raw_transcript_with_a_visible_error(
     provider, hermes_config, local_whisper, call_llm, skill_roots
 ):
-    hermes_config({"stt": {"local_llm_polished": {"post_processing": {"skill": "not-installed"}}}})
+    hermes_config({"stt": {"stt_enhance": {"post_processing": {"skill": "not-installed"}}}})
     local_whisper({"success": True, "transcript": "raw transcript"})
     calls = call_llm()
 
@@ -640,7 +626,7 @@ def test_inaccessible_skill_path_keeps_the_asr_transcript(
     provider, hermes_config, local_whisper, call_llm, stat_denied
 ):
     stat_denied("/denied")
-    hermes_config({"stt": {"local_llm_polished": {"post_processing": {"skill": "/denied/x/SKILL.md"}}}})
+    hermes_config({"stt": {"stt_enhance": {"post_processing": {"skill": "/denied/x/SKILL.md"}}}})
     local_whisper({"success": True, "transcript": "raw transcript"})
     calls = call_llm()
 
@@ -658,7 +644,7 @@ def test_inaccessible_skill_root_keeps_the_asr_transcript(
 ):
     (profile, _external), _ = skill_roots
     stat_denied(profile, methods=("is_dir",))
-    hermes_config({"stt": {"local_llm_polished": {"post_processing": {"skill": "cleanup"}}}})
+    hermes_config({"stt": {"stt_enhance": {"post_processing": {"skill": "cleanup"}}}})
     local_whisper({"success": True, "transcript": "raw transcript"})
     call_llm()
 

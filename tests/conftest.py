@@ -1,8 +1,8 @@
 """Test harness for the plugin.
 
-The plugin directory is hyphenated (``local-llm-polished/``) and imports Hermes
+The plugin directory is hyphenated (``hermes-stt-enhance/``) and imports Hermes
 modules, so tests load it exactly the way ``hermes_cli.plugins`` does — as
-``hermes_plugins.local_llm_polished`` with ``submodule_search_locations`` — on
+``hermes_plugins.hermes_stt_enhance`` with ``submodule_search_locations`` — on
 top of minimal stand-ins for the Hermes APIs it touches. That keeps the suite
 runnable without a Hermes checkout.
 """
@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-PLUGIN_DIR = Path(__file__).resolve().parents[1] / "local-llm-polished"
-MODULE_NAME = "hermes_plugins.local_llm_polished"
+PLUGIN_DIR = Path(__file__).resolve().parents[1] / "hermes-stt-enhance"
+MODULE_NAME = "hermes_plugins.hermes_stt_enhance"
 
 HAS_FFMPEG = shutil.which("ffmpeg") is not None
 requires_ffmpeg = pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not installed")
@@ -320,7 +320,7 @@ def _isolate_runtime_path(monkeypatch, tmp_path_factory):
     installed by one test would satisfy the next one's probe.
     """
     root = tmp_path_factory.mktemp("plugin-runtimes")
-    monkeypatch.setenv("HERMES_LLM_POLISHED_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("HERMES_STT_ENHANCE_RUNTIME_ROOT", str(root))
     before_path = list(sys.path)
     before_modules = set(sys.modules)
     yield root

@@ -12,7 +12,7 @@ from conftest import write_skill
 
 @pytest.fixture
 def skill_source():
-    return sys.modules["hermes_plugins.local_llm_polished.skill_source"]
+    return sys.modules["hermes_plugins.hermes_stt_enhance.skill_source"]
 
 
 def test_name_resolves_in_the_profile_root_without_frontmatter(skill_source, skill_roots):

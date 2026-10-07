@@ -13,7 +13,7 @@ rebuild, so the packages stay gone and STT dies with a generic "not available".
 So this plugin does not keep its dependencies in Hermes' venv at all. It owns a
 runtime directory *outside* the venv, which a venv rebuild cannot touch:
 
-    ~/.hermes/plugin-runtimes/local-llm-polished/<env-tag>-<lock-digest>/
+    ~/.hermes/plugin-runtimes/hermes-stt-enhance/<env-tag>-<lock-digest>/
 
 The directory is **content-addressed**: its name carries the interpreter ABI,
 the platform, and a digest of the exact pinned dependency lock. That single
@@ -45,7 +45,7 @@ This mirrors Hermes' own durable lazy-install target
 (``tools.lazy_deps._activate_target_on_syspath``).
 
 Runtime installs stay gated by ``security.allow_lazy_installs`` and by this
-plugin's ``stt.local_llm_polished.parakeet.auto_install_deps``.
+plugin's ``stt.stt_enhance.parakeet.auto_install_deps``.
 """
 
 from __future__ import annotations
@@ -106,9 +106,9 @@ DEPENDENCY_LOCK: Tuple[Requirement, ...] = (
 # fallback in audio.py, so it is installed but not part of the go/no-go probe.
 REQUIRED_IMPORTS: Tuple[str, ...] = ("sherpa_onnx",)
 
-PLUGIN_ID = "local-llm-polished"
+PLUGIN_ID = "hermes-stt-enhance"
 RUNTIME_STATE_FILE = "runtime.json"
-RUNTIME_ROOT_ENV = "HERMES_LLM_POLISHED_RUNTIME_ROOT"
+RUNTIME_ROOT_ENV = "HERMES_STT_ENHANCE_RUNTIME_ROOT"
 
 # A voice message is already waiting on this, so it is bounded well below the
 # 300 s Hermes uses for background lazy installs.
@@ -701,7 +701,7 @@ def can_provide(*, auto_install: bool, lock: Optional[Sequence[Requirement]] = N
     if not auto_install:
         logger.warning(
             "parakeet backend: %s is unavailable and "
-            "stt.local_llm_polished.parakeet.auto_install_deps is false. "
+            "stt.stt_enhance.parakeet.auto_install_deps is false. "
             "Provision it with: %s",
             ", ".join(missing_imports()), command,
         )
@@ -751,7 +751,7 @@ def ensure(*, auto_install: bool, lock: Optional[Sequence[Requirement]] = None) 
             return "fallback-runtime"
         raise DependencyError(
             "The parakeet backend's dependencies are not installed and "
-            "stt.local_llm_polished.parakeet.auto_install_deps is false. "
+            "stt.stt_enhance.parakeet.auto_install_deps is false. "
             f"Provision them with: {command}"
         )
     if not installs_allowed():

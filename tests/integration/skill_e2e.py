@@ -59,10 +59,10 @@ def check(condition, message):
 
 def write_config(home: Path, port: int, post_processing: dict) -> None:
     config = {
-        "plugins": {"enabled": ["local-llm-polished"]},
-        "stt": {"enabled": True, "provider": "local_llm_polished",
-                "local_llm_polished": {"post_processing": post_processing}},
-        "auxiliary": {"stt_polish": {"provider": "custom", "base_url": f"http://127.0.0.1:{port}/v1",
+        "plugins": {"enabled": ["hermes-stt-enhance"]},
+        "stt": {"enabled": True, "provider": "stt_enhance",
+                "stt_enhance": {"post_processing": post_processing}},
+        "auxiliary": {"stt_enhance": {"provider": "custom", "base_url": f"http://127.0.0.1:{port}/v1",
                                      "api_key": "e2e-not-a-secret", "model": "fake-polisher"}},
     }
     (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
@@ -77,7 +77,7 @@ def main() -> None:
     home = Path(os.environ["HERMES_HOME"]).resolve()
     check(home.is_dir() and not any(home.iterdir()), f"HERMES_HOME {home} is an empty disposable dir")
 
-    shutil.copytree(plugin_src, home / "plugins" / "local-llm-polished")
+    shutil.copytree(plugin_src, home / "plugins" / "hermes-stt-enhance")
     skill_dir = home / "skills" / "voice" / "acme-transcripts"
     (skill_dir / "scripts").mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
@@ -115,7 +115,7 @@ def main() -> None:
     # 1. Skill by name, through the real dispatch and the real auxiliary client.
     result = tt.transcribe_audio(str(audio))
     print(json.dumps({k: v for k, v in result.items() if k != "transcript"}, sort_keys=True))
-    check(result.get("success") is True and result.get("provider") == "local_llm_polished",
+    check(result.get("success") is True and result.get("provider") == "stt_enhance",
           "transcribe_audio dispatched to the plugin provider")
     check(len(asr_calls) == 1, "local ASR boundary called once")
     check(result.get("transcript") == REPLY and result.get("post_processing_applied") is True,

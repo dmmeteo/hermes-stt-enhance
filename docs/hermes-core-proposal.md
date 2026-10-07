@@ -33,11 +33,11 @@ in per-family patches.
 
 ## What this plugin does instead
 
-`local-llm-polished` implements a plugin-owned runtime: dependencies live in a
+`hermes-stt-enhance` implements a plugin-owned runtime: dependencies live in a
 content-addressed directory outside the venv, appended to `sys.path`, staged
 and verified on install, with rollback to the previous runtime and one shared
 copy per machine. See [dependency-model.md](dependency-model.md);
-`local-llm-polished/runtime_deps.py` is ~450 lines including the lifecycle.
+`hermes-stt-enhance/runtime_deps.py` is ~450 lines including the lifecycle.
 
 It works, but every plugin with a compiled or heavyweight optional dependency
 would have to write the same 450 lines, and each copy would get the ABI

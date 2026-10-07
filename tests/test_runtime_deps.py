@@ -48,7 +48,7 @@ def test_a_changed_pin_addresses_a_different_directory(runtime_deps_mod, faux_lo
 
 
 def test_profiles_share_one_runtime_root(runtime_deps_mod, monkeypatch, tmp_path):
-    monkeypatch.delenv("HERMES_LLM_POLISHED_RUNTIME_ROOT", raising=False)
+    monkeypatch.delenv("HERMES_STT_ENHANCE_RUNTIME_ROOT", raising=False)
 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profiles" / "prime"))
     prime = runtime_deps_mod.runtime_root()
@@ -58,7 +58,7 @@ def test_profiles_share_one_runtime_root(runtime_deps_mod, monkeypatch, tmp_path
     default = runtime_deps_mod.runtime_root()
 
     # Four gateways on one machine download the wheels once, not four times.
-    assert prime == shopy == default == tmp_path / "plugin-runtimes" / "local-llm-polished"
+    assert prime == shopy == default == tmp_path / "plugin-runtimes" / "hermes-stt-enhance"
 
 
 def test_the_installer_is_pinned_to_the_running_interpreter(
@@ -164,7 +164,7 @@ def test_the_runtime_records_what_it_installed(
     assert state["lock"] == ["faux-asr==1.0.0", "faux-numeric==2.0.0"]
     assert state["environment"] == runtime_deps_mod.environment_tag()
     assert state["versions"] == {"faux-asr": "1.0.0", "faux-numeric": "2.0.0"}
-    assert state["plugin"] == "local-llm-polished"
+    assert state["plugin"] == "hermes-stt-enhance"
 
 
 def test_the_runtime_never_shadows_hermes_core(

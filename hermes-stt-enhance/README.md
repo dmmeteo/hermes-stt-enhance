@@ -1,4 +1,4 @@
-# Hermes Local LLM Polished STT
+# Hermes STT Enhance
 
 A Hermes Agent STT plugin for **customizable transcript enhancement**: speech is recognized locally (fast, cheap), then an LLM pass rewrites the raw transcript following instructions you own. Those instructions can live in a **custom Hermes skill** that you edit like any other skill, so you don't need a long prompt inline in `config.yaml`.
 
@@ -8,7 +8,7 @@ It registers one speech-to-text provider with two interchangeable local backends
 
 ```yaml
 stt:
-  provider: local_llm_polished
+  provider: stt_enhance
 ```
 
 ```text
@@ -20,8 +20,8 @@ Enhancement with your own skill takes one line. See [Custom instructions from a 
 
 ```yaml
 stt:
-  provider: local_llm_polished
-  local_llm_polished:
+  provider: stt_enhance
+  stt_enhance:
     post_processing:
       skill: transcript-house-style
 ```
@@ -45,7 +45,7 @@ Local audio processing does **not** make the transcript private. What leaves the
 | What | Where it goes |
 |---|---|
 | Audio | Stays local. Decoded by faster-whisper (through Hermes) or sherpa-onnx in-process. Never uploaded by this plugin. |
-| Transcript text | Sent to the post-processing LLM. Post-processing is **on by default**, and with no `provider` set it uses Hermes' own LLM routing for the `stt_polish` auxiliary task, which is normally your main (often remote) provider. Point it at a local endpoint, or set `post_processing.enabled: false`, to keep transcripts on the machine. |
+| Transcript text | Sent to the post-processing LLM. Post-processing is **on by default**, and with no `provider` set it uses Hermes' own LLM routing for the `stt_enhance` auxiliary task, which is normally your main (often remote) provider. Point it at a local endpoint, or set `post_processing.enabled: false`, to keep transcripts on the machine. |
 | Credentials | None of its own. The LLM call goes through Hermes' public auxiliary client (`agent.auxiliary_client.call_llm`) with whatever credentials Hermes already has. The plugin stores no tokens and reads no other tool's logins. No `requires_env`. |
 
 Everything else the plugin does that a user would want to know about:
@@ -53,7 +53,7 @@ Everything else the plugin does that a user would want to know about:
 - **Shell commands.** `ffmpeg` and `ffprobe` run as subprocesses (with timeouts, stdin closed) when `audio_speed` is not `1.0`, when the Parakeet backend is selected, or to measure duration for chunking. The default faster-whisper configuration at speed `1.0` never shells out.
 - **Network and package installs (Parakeet only).** The first time the Parakeet backend runs, it installs the pinned `sherpa-onnx==1.13.4` and `numpy==2.4.3` from PyPI with `uv pip` (or `pip`) into a plugin-owned directory. Turn this off with `parakeet.auto_install_deps: false` or Hermes-wide `security.allow_lazy_installs: false`. The faster-whisper backend installs nothing; Hermes itself may download the faster-whisper model on first use, as it does for its built-in `local` provider.
 - **Files read outside the plugin.** Hermes' STT config, the audio file Hermes hands over, the `SKILL.md` named by `post_processing.skill` (instruction body only, at most 64 KiB, never executed), and the Parakeet model files (`parakeet.model_path`, `$HERMES_PARAKEET_MODEL_PATH`, or the default directories listed under [Parakeet setup](#parakeet-setup)).
-- **Files written.** A temporary working directory per transcription (removed afterwards), and, for Parakeet only, the dependency runtime under `~/.hermes/plugin-runtimes/local-llm-polished/`.
+- **Files written.** A temporary working directory per transcription (removed afterwards), and, for Parakeet only, the dependency runtime under `~/.hermes/plugin-runtimes/hermes-stt-enhance/`.
 - **No** tools, hooks, background processes, telemetry or self-updating code. Concurrent Parakeet decodes are limited in-process; nothing outlives the Hermes process.
 
 ## What the cleanup pass can and cannot do
@@ -87,20 +87,20 @@ With no `backend` key at all, the provider behaves exactly like the built-in Her
 
 ## Install
 
-The plugin lives in the `local-llm-polished/` subdirectory of [dmmeteo/hermes-local-llm-polished](https://github.com/dmmeteo/hermes-local-llm-polished). Install it from the public repository:
+The plugin lives in the `hermes-stt-enhance/` subdirectory of [dmmeteo/hermes-stt-enhance](https://github.com/dmmeteo/hermes-stt-enhance). Install it from the public repository:
 
 ```bash
-hermes plugins install dmmeteo/hermes-local-llm-polished#local-llm-polished
+hermes plugins install dmmeteo/hermes-stt-enhance#hermes-stt-enhance
 ```
 
-Once the Hermes plugin catalog entry is merged, `hermes plugins install local-llm-polished` installs the reviewed, SHA-pinned release instead. That name works only after the catalog PR lands.
+Once the Hermes plugin catalog entry is merged, `hermes plugins install hermes-stt-enhance` installs the reviewed, SHA-pinned release instead. That name works only after the catalog PR lands.
 
 A manual copy also works. For a named profile, copy into `~/.hermes/profiles/<name>/plugins/` instead:
 
 ```bash
-git clone https://github.com/dmmeteo/hermes-local-llm-polished
-mkdir -p ~/.hermes/plugins/local-llm-polished
-cp -r hermes-local-llm-polished/local-llm-polished/* ~/.hermes/plugins/local-llm-polished/
+git clone https://github.com/dmmeteo/hermes-stt-enhance
+mkdir -p ~/.hermes/plugins/hermes-stt-enhance
+cp -r hermes-stt-enhance/hermes-stt-enhance/* ~/.hermes/plugins/hermes-stt-enhance/
 ```
 
 Minimal `config.yaml` — local faster-whisper plus cleanup:
@@ -108,18 +108,18 @@ Minimal `config.yaml` — local faster-whisper plus cleanup:
 ```yaml
 plugins:
   enabled:
-    - local-llm-polished
+    - hermes-stt-enhance
 
 stt:
   enabled: true
-  provider: local_llm_polished
+  provider: stt_enhance
 
   # Keep the built-in local provider configured as an easy fallback.
   local:
     model: base
     language: en
 
-  local_llm_polished:
+  stt_enhance:
     model: base
     language: en
     post_processing:
@@ -131,6 +131,17 @@ Restart Hermes after changing plugin or STT config:
 ```bash
 hermes gateway restart      # hermes -p developer gateway restart for a profile
 ```
+
+### Upgrading from `local-llm-polished` (0.4.x)
+
+0.5.0 renamed the plugin to `hermes-stt-enhance`, the provider and config block to `stt_enhance`, and the auxiliary LLM task to `stt_enhance`. Settings and behaviour are unchanged, but 0.5.0 no longer reads the old names. Rename a profile's config with Hermes' interpreter (keeps comments, writes a backup next to the file, refuses on conflicting old/new keys, safe to re-run; `--rollback` reverses it):
+
+```bash
+~/.hermes/hermes-agent/venv/bin/python scripts/migrate_config.py ~/.hermes/config.yaml --check
+~/.hermes/hermes-agent/venv/bin/python scripts/migrate_config.py ~/.hermes/config.yaml
+```
+
+It maps `stt.provider`, `stt.local_llm_polished` (and the prototype `polish:`/`repair:` stage names) to `stt.stt_enhance.post_processing`, `auxiliary.stt_polish`, and the `plugins.enabled`/`disabled`/`entries` keys. Then replace the installed `plugins/local-llm-polished` directory with `plugins/hermes-stt-enhance` and restart the gateway. The Parakeet runtime moves to `~/.hermes/plugin-runtimes/hermes-stt-enhance/`; copy the old directory there to skip a reinstall.
 
 ## Dependencies
 
@@ -161,7 +172,7 @@ A Hermes update can recreate the agent venv from `pyproject.toml`, which wipes a
 The parakeet backend therefore keeps its dependencies in a directory of its own, outside the venv, named after the interpreter ABI and a digest of the exact pinned lock:
 
 ```
-~/.hermes/plugin-runtimes/local-llm-polished/cpython-311-linux-x86_64-d258e225fdb6/
+~/.hermes/plugin-runtimes/hermes-stt-enhance/cpython-311-linux-x86_64-d258e225fdb6/
 ```
 
 | Event | What it costs you |
@@ -185,7 +196,7 @@ To freeze the environment instead — an already-provisioned runtime keeps worki
 
 ```yaml
 stt:
-  local_llm_polished:
+  stt_enhance:
     parakeet:
       auto_install_deps: false
 ```
@@ -198,7 +209,7 @@ Point the plugin at an exported model directory:
 
 ```yaml
 stt:
-  local_llm_polished:
+  stt_enhance:
     backend: parakeet
     parakeet:
       model_path: ~/.hermes/models/parakeet-v3-int8
@@ -234,7 +245,7 @@ Parakeet holds the whole utterance in inference state, so one long file can exha
 
 ```yaml
 stt:
-  local_llm_polished:
+  stt_enhance:
     chunking:
       enabled: true
       threshold_seconds: 120   # decode in one pass below this
@@ -255,7 +266,7 @@ Parakeet saturates every core, so concurrent decodes are limited process-wide (`
 
 ```yaml
 stt:
-  local_llm_polished:
+  stt_enhance:
     parakeet:
       max_concurrency: 2
       num_threads: 4
@@ -265,11 +276,11 @@ The faster-whisper backend is not limited by the plugin.
 
 ## LLM post-processing
 
-`post_processing` is the canonical block name. The prototype names **`polish` and `repair` remain supported** as aliases — 0.1.0 configs keep working unchanged. If several are present, the first of `post_processing`, `polish`, `repair` wins and the legacy name is noted in the debug log.
+The block is named `post_processing`. The prototype names `polish` and `repair` are no longer read; `scripts/migrate_config.py` renames them (see [Upgrading](#upgrading-from-local-llm-polished-04x)).
 
 ```yaml
 stt:
-  local_llm_polished:
+  stt_enhance:
     post_processing:
       enabled: true
       provider: default        # "default" maps to Hermes' main provider
@@ -315,7 +326,7 @@ Put your enhancement rules in a Hermes skill and reference it. The skill can hol
 
    ```yaml
    stt:
-     local_llm_polished:
+     stt_enhance:
        post_processing:
          skill: transcript-house-style
    ```
@@ -343,7 +354,7 @@ Whatever happens, the stage cannot lose speech: on error, timeout, or an empty r
 {
   "success": True,
   "transcript": "Deploy the staging cluster.",
-  "provider": "local_llm_polished",
+  "provider": "stt_enhance",
   "backend": "parakeet",          # which engine ran
   "audio_speed": 1.25,
   "chunks": 3,                    # 1 unless the audio was chunked
@@ -362,17 +373,17 @@ The configuration this plugin is developed against: a named `developer` profile,
 ```yaml
 plugins:
   enabled:
-    - local-llm-polished
+    - hermes-stt-enhance
 
 stt:
   enabled: true
-  provider: local_llm_polished
+  provider: stt_enhance
 
   local:
     model: base
     language: en
 
-  local_llm_polished:
+  stt_enhance:
     backend: parakeet
     language: en
 
@@ -424,14 +435,15 @@ The suite stubs the Hermes APIs the plugin imports, so no Hermes checkout is nee
 `tests/integration/skill_e2e.py` is a fresh-process check against a real Hermes checkout. It uses a disposable `HERMES_HOME` and a real skill file, and loads the plugin through Hermes' plugin loader and transcription dispatch, with `call_llm` going to a local fake OpenAI-compatible server. Only the ASR call is faked. Nothing is downloaded and nothing paid is called:
 
 ```bash
-cd /path/to/hermes-agent && HERMES_HOME=$(mktemp -d) .venv/bin/python /path/to/repo/tests/integration/skill_e2e.py /path/to/repo/local-llm-polished
+cd /path/to/hermes-agent && HERMES_HOME=$(mktemp -d) .venv/bin/python /path/to/repo/tests/integration/skill_e2e.py /path/to/repo/hermes-stt-enhance
 ```
 
 ## Provider names
 
-- Plugin name: `local-llm-polished`
-- STT provider name: `local_llm_polished`
-- Display name: `Local LLM Post-Processed STT`
+- Plugin name: `hermes-stt-enhance`
+- STT provider name: `stt_enhance`
+- Display name: `STT Enhance`
+- Auxiliary LLM task: `stt_enhance` (`auxiliary.stt_enhance.*` routes the post-processing call when `post_processing.provider` is unset)
 
 The separate provider name is intentional: Hermes built-in STT provider names cannot be shadowed by plugins.
 

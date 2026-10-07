@@ -17,7 +17,7 @@ rebuild nothing is installed, so nothing looks active, so nothing is repaired.
 The packages stay gone, and because Hermes returns
 
 ```
-STT plugin 'local_llm_polished' is not available — check that its required
+STT plugin 'stt_enhance' is not available — check that its required
 credentials / dependencies are configured.
 ```
 
@@ -30,7 +30,7 @@ missing". That is the exact outage this model exists to prevent.
 The plugin owns a runtime directory **outside** Hermes' venv:
 
 ```
-~/.hermes/plugin-runtimes/local-llm-polished/cpython-311-linux-x86_64-d258e225fdb6/
+~/.hermes/plugin-runtimes/hermes-stt-enhance/cpython-311-linux-x86_64-d258e225fdb6/
 ├── sherpa_onnx/
 ├── numpy/
 └── runtime.json          ← written last; the completion marker
@@ -102,7 +102,7 @@ platform the plugin supports.
 Runtime installs stay under the user's control:
 
 - `security.allow_lazy_installs: false` (Hermes-wide) blocks provisioning.
-- `stt.local_llm_polished.parakeet.auto_install_deps: false` blocks it for this
+- `stt.stt_enhance.parakeet.auto_install_deps: false` blocks it for this
   plugin only.
 
 Either way an already-provisioned runtime is still used — freezing installs
@@ -141,6 +141,6 @@ should never attempt an install.
 
 ### Moving the runtime
 
-`HERMES_LLM_POLISHED_RUNTIME_ROOT` overrides the location — useful when
+`HERMES_STT_ENHANCE_RUNTIME_ROOT` overrides the location — useful when
 `~/.hermes` is small, or when a read-only image wants the runtime on a data
 volume.

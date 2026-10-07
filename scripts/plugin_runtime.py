@@ -24,13 +24,13 @@ import logging
 import sys
 from pathlib import Path
 
-PLUGIN_DIR = Path(__file__).resolve().parent.parent / "local-llm-polished"
+PLUGIN_DIR = Path(__file__).resolve().parent.parent / "hermes-stt-enhance"
 
 
 def _load_runtime_deps():
     """Load ``runtime_deps`` standalone (the plugin dir is not importable)."""
     spec = importlib.util.spec_from_file_location(
-        "local_llm_polished_runtime_deps", PLUGIN_DIR / "runtime_deps.py"
+        "stt_enhance_runtime_deps", PLUGIN_DIR / "runtime_deps.py"
     )
     if spec is None or spec.loader is None:  # pragma: no cover - defensive
         raise SystemExit(f"Could not load {PLUGIN_DIR / 'runtime_deps.py'}")

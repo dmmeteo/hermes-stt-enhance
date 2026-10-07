@@ -127,7 +127,7 @@ def apply(transcript: str, cfg: Dict[str, Any]) -> Tuple[str, Optional[str]]:
     try:
         prompt = instructions(cfg)
     except SkillError as exc:
-        logger.warning("local_llm_polished post-processing skipped; keeping raw transcript: %s", exc)
+        logger.warning("stt_enhance post-processing skipped; keeping raw transcript: %s", exc)
         return transcript, f"post_processing.skill: {exc}"
     extra_body = dict(cfg.get("extra_body") or {})
     effort = reasoning_effort(cfg)
@@ -141,7 +141,7 @@ def apply(transcript: str, cfg: Dict[str, Any]) -> Tuple[str, Optional[str]]:
 
         started = time.monotonic()
         response = call_llm(
-            task="stt_polish",
+            task="stt_enhance",
             provider=provider,
             model=model,
             messages=build_messages(raw, prompt),
@@ -152,12 +152,12 @@ def apply(transcript: str, cfg: Dict[str, Any]) -> Tuple[str, Optional[str]]:
         )
         cleaned = (response.choices[0].message.content or "").strip()
     except Exception as exc:
-        logger.warning("local_llm_polished post-processing failed; keeping raw transcript: %s", exc)
+        logger.warning("stt_enhance post-processing failed; keeping raw transcript: %s", exc)
         return transcript, str(exc)
 
     if not cleaned:
-        logger.info("local_llm_polished post-processing returned empty text; keeping raw transcript")
+        logger.info("stt_enhance post-processing returned empty text; keeping raw transcript")
         return transcript, None
 
-    logger.info("local_llm_polished post-processed transcript in %.2fs", time.monotonic() - started)
+    logger.info("stt_enhance post-processed transcript in %.2fs", time.monotonic() - started)
     return cleaned, None

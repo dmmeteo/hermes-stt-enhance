@@ -1,10 +1,10 @@
 name: local-llm-polished
-version: 0.3.1
+version: 0.4.0
 requires_hermes: ">=0.15.0"
 description: >-
   Local STT with two interchangeable backends (faster-whisper or sherpa-onnx
-  Parakeet V3), long-audio chunking, and an optional bounded LLM post-processing
-  pass over the raw transcript.
+  Parakeet V3), long-audio chunking, and an optional bounded LLM pass that
+  enhances the transcript with instructions from a custom skill or prompt.
 provides_transcription_providers:
   - local_llm_polished
 

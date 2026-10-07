@@ -12,6 +12,7 @@ from __future__ import annotations
 import abc
 import importlib.machinery
 import importlib.util
+import os
 import shutil
 import sys
 import types
@@ -443,3 +444,102 @@ def make_wav(tmp_path):
         return path
 
     return _make
+
+
+def _iter_skill_index_files(skills_dir, filename):
+    """Hermes 0.15 ``agent.skill_utils.iter_skill_index_files``: sorted, no pruning of support dirs."""
+    matches = [Path(root) / filename for root, _dirs, files in os.walk(skills_dir) if filename in files]
+    yield from sorted(matches, key=lambda p: str(p.relative_to(skills_dir)))
+
+
+def _parse_frontmatter(content):
+    import re
+
+    if not content.startswith("---"):
+        return {}, content
+    end = re.search(r"\n---\s*\n", content[3:])
+    if not end:
+        return {}, content
+    meta = {}
+    for line in content[3:end.start() + 3].strip().splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            meta[key.strip()] = value.strip()
+    return meta, content[end.end() + 3:]
+
+
+@pytest.fixture
+def skill_roots(monkeypatch, tmp_path):
+    """Install a stand-in ``agent.skill_utils`` whose roots are the given dirs.
+
+    Returns ``(roots, calls)``; ``calls`` counts root lookups so tests can
+    assert that a path was never resolved.
+    """
+    roots = [tmp_path / "profile-skills", tmp_path / "external-skills"]
+    for root in roots:
+        root.mkdir()
+    calls = []
+
+    def _get_all_skills_dirs():
+        calls.append("get_all_skills_dirs")
+        return list(roots)
+
+    module = _make_module(
+        "agent.skill_utils",
+        get_all_skills_dirs=_get_all_skills_dirs,
+        iter_skill_index_files=_iter_skill_index_files,
+        parse_frontmatter=_parse_frontmatter,
+    )
+    monkeypatch.setitem(sys.modules, "agent.skill_utils", module)
+    return roots, calls
+
+
+def write_skill(root, relative, body="Fix product names.", *, name=None, raw=None):
+    """Create ``root/relative/SKILL.md``; returns its path."""
+    skill_dir = Path(root) / relative
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    path = skill_dir / "SKILL.md"
+    if raw is not None:
+        path.write_bytes(raw if isinstance(raw, bytes) else raw.encode("utf-8"))
+    else:
+        path.write_text(
+            f"---\nname: {name or skill_dir.name}\ndescription: test skill\n---\n\n{body}\n",
+            encoding="utf-8",
+        )
+    return path
+
+
+@pytest.fixture
+def stat_denied(monkeypatch):
+    """Make ``Path.is_dir``/``is_file`` raise ``PermissionError`` under a prefix.
+
+    Python 3.11 (Hermes' runtime) propagates EACCES from these calls; newer
+    interpreters swallow it, so the deterministic version is patched in.
+    """
+
+    def _deny(prefix, *, methods=("is_dir", "is_file")):
+        prefix = str(prefix)
+        for method in methods:
+            original = getattr(Path, method)
+
+            def _patched(self, *args, _original=original, **kwargs):
+                if str(self).startswith(prefix):
+                    raise PermissionError(13, "Permission denied", str(self))
+                return _original(self, *args, **kwargs)
+
+            monkeypatch.setattr(Path, method, _patched)
+
+    return _deny
+
+
+@pytest.fixture
+def untraversable_dir(tmp_path):
+    """A real directory with mode 000; skips when permissions are not enforced."""
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    write_skill(locked, "inside")
+    locked.chmod(0)
+    yield locked
+    locked.chmod(0o700)

@@ -1,6 +1,6 @@
 # Hermes Local LLM Polished STT
 
-A Hermes Agent STT plugin for people who want **fast, cheap, local speech recognition** without the messy transcripts that small local ASR models produce.
+A Hermes Agent STT plugin for **customizable transcript enhancement**: speech is recognized locally (fast, cheap), then an LLM pass rewrites the raw transcript following instructions you own. Those instructions can live in a **custom Hermes skill** that you edit like any other skill, so you don't need a long prompt inline in `config.yaml`.
 
 Audio is recognized on your machine. The transcript is then, by default, sent to an LLM for cleanup. If that LLM is a remote provider, the **transcript leaves your machine**. Read [Privacy and data flow](#privacy-and-data-flow) before installing.
 
@@ -13,6 +13,17 @@ stt:
 
 ```text
 audio → [ffmpeg speed / 16 kHz mono] → local ASR (+chunking) → LLM post-processing → Hermes agent
+                                                                  ↑ instructions: your skill, inline prompt, or the default
+```
+
+Enhancement with your own skill takes one line. See [Custom instructions from a skill](#custom-instructions-from-a-skill):
+
+```yaml
+stt:
+  provider: local_llm_polished
+  local_llm_polished:
+    post_processing:
+      skill: transcript-house-style
 ```
 
 ## Use case
@@ -41,7 +52,7 @@ Everything else the plugin does that a user would want to know about:
 
 - **Shell commands.** `ffmpeg` and `ffprobe` run as subprocesses (with timeouts, stdin closed) when `audio_speed` is not `1.0`, when the Parakeet backend is selected, or to measure duration for chunking. The default faster-whisper configuration at speed `1.0` never shells out.
 - **Network and package installs (Parakeet only).** The first time the Parakeet backend runs, it installs the pinned `sherpa-onnx==1.13.4` and `numpy==2.4.3` from PyPI with `uv pip` (or `pip`) into a plugin-owned directory. Turn this off with `parakeet.auto_install_deps: false` or Hermes-wide `security.allow_lazy_installs: false`. The faster-whisper backend installs nothing; Hermes itself may download the faster-whisper model on first use, as it does for its built-in `local` provider.
-- **Files read outside the plugin.** Hermes' STT config, the audio file Hermes hands over, and the Parakeet model files (`parakeet.model_path`, `$HERMES_PARAKEET_MODEL_PATH`, or the default directories listed under [Parakeet setup](#parakeet-setup)).
+- **Files read outside the plugin.** Hermes' STT config, the audio file Hermes hands over, the `SKILL.md` named by `post_processing.skill` (instruction body only, at most 64 KiB, never executed), and the Parakeet model files (`parakeet.model_path`, `$HERMES_PARAKEET_MODEL_PATH`, or the default directories listed under [Parakeet setup](#parakeet-setup)).
 - **Files written.** A temporary working directory per transcription (removed afterwards), and, for Parakeet only, the dependency runtime under `~/.hermes/plugin-runtimes/local-llm-polished/`.
 - **No** tools, hooks, background processes, telemetry or self-updating code. Concurrent Parakeet decodes are limited in-process; nothing outlives the Hermes process.
 
@@ -281,7 +292,48 @@ A transcript is whatever the microphone picked up, so it is treated as data, nev
 - the default system prompt forbids following, answering, obeying, or executing anything inside the delimiters, forbids translating, and restricts edits to obvious ASR errors (broken/merged words, homophones, spacing, casing, names, acronyms, paths, technical terms) plus unmistakable hesitation sounds;
 - only the two messages the plugin builds are ever sent.
 
-A custom `prompt` replaces the system prompt but keeps the delimiting and neutralization. If you write your own, keep the "this is data, not instructions" framing.
+A custom `prompt` replaces the system prompt but keeps the delimiting and neutralization. If you write your own, keep the "this is data, not instructions" framing. Skill instructions get a short fixed data-handling guard appended automatically. The inline `prompt` is sent verbatim, as before.
+
+### Custom instructions from a skill
+
+Put your enhancement rules in a Hermes skill and reference it. The skill can hold your glossary, product names, house style or formatting rules, and you edit it like any other skill.
+
+1. Create `~/.hermes/skills/transcript-house-style/SKILL.md` in the profile Hermes runs with (`$HERMES_HOME/skills/...`):
+
+   ```markdown
+   ---
+   name: transcript-house-style
+   description: How to clean up my voice-message transcripts
+   ---
+
+   Fix obvious speech-recognition errors only. Spell our products as AcmeCloud and
+   AcmeCLI. Keep English technical terms inside Ukrainian sentences. Never translate.
+   Return only the transcript.
+   ```
+
+2. Reference it:
+
+   ```yaml
+   stt:
+     local_llm_polished:
+       post_processing:
+         skill: transcript-house-style
+   ```
+
+Edits take effect on the next voice message, with no restart, because the file is read on each transcription.
+
+**Precedence:** `skill` > `prompt` > built-in default. With `skill` unset (or `null`), behavior is exactly what it was before this option existed.
+
+**Resolution.**
+- A **name** (`transcript-house-style`, or `category/name` to disambiguate) resolves through Hermes' own skill directories for the active profile, in Hermes' order: the profile's `skills/`, then `skills.external_dirs`. It matches the skill's directory name, its `category/name` path, or its frontmatter `name`. The first directory holding a match wins. Two different skills with one name in the same directory are refused as ambiguous rather than guessed. Trusted project skill dirs are not searched, so the result doesn't depend on Hermes' working directory.
+- An **explicit path** (starts with `/` or `~`, or ends in `.md`) must be absolute after `~`/`$VAR` expansion. It can point at a `SKILL.md` or at its directory. You choose this path in your own config. Transcript content never selects a file.
+- URLs are refused. Nothing is downloaded.
+
+**What is read.** Only the Markdown body after the YAML frontmatter is read, and it becomes the system instructions. The transcript is still sent as delimited data. Supporting files (`scripts/`, `references/`, ...) are not read and never executed. The skill is not loaded into the agent session and does not count as a `skill_view`.
+
+**Failures are loud.** If `skill` is set but the skill is missing, ambiguous, inaccessible (including permission errors on the path or a skill directory), unreadable, not UTF-8, larger than 64 KiB, has no frontmatter, or has an empty body, the raw transcript is returned unchanged with `post_processing_error` set (and a warning logged). The plugin never quietly falls back to the inline prompt or the default. When post-processing is disabled or the transcript is empty, the skill is not read at all.
+
+**Compatibility.** Names resolve through `agent.skill_utils.get_all_skills_dirs`, `iter_skill_index_files` and `parse_frontmatter`. Those helpers are present in Hermes source from 0.15.0 (`v2026.5.28`) to current `main`. The integration test exercises them only on current `main`, so older releases are compatible by source inspection only. A Hermes build without them reports an error for a skill name. Explicit paths don't depend on them.
 
 Whatever happens, the stage cannot lose speech: on error, timeout, or an empty reply the raw transcript is returned, with `post_processing_error` set when there was an actual failure.
 
@@ -368,6 +420,12 @@ python -m pytest -q
 ```
 
 The suite stubs the Hermes APIs the plugin imports, so no Hermes checkout is needed; ffmpeg-dependent tests skip automatically when ffmpeg is absent.
+
+`tests/integration/skill_e2e.py` is a fresh-process check against a real Hermes checkout. It uses a disposable `HERMES_HOME` and a real skill file, and loads the plugin through Hermes' plugin loader and transcription dispatch, with `call_llm` going to a local fake OpenAI-compatible server. Only the ASR call is faked. Nothing is downloaded and nothing paid is called:
+
+```bash
+cd /path/to/hermes-agent && HERMES_HOME=$(mktemp -d) .venv/bin/python /path/to/repo/tests/integration/skill_e2e.py /path/to/repo/local-llm-polished
+```
 
 ## Provider names
 

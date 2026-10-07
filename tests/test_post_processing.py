@@ -271,3 +271,88 @@ def test_a_malformed_response_is_treated_as_a_failure(post_processing_mod, monke
 
     assert text == "raw"
     assert error
+
+
+# ---------------------------------------------------------------------------
+# Skill-sourced instructions: skill > prompt > default
+# ---------------------------------------------------------------------------
+
+
+def test_skill_instructions_take_precedence_over_the_inline_prompt(post_processing_mod, call_llm, skill_roots):
+    from conftest import write_skill
+
+    (profile, _external), _ = skill_roots
+    write_skill(profile, "team-terms", body="Spell our product as AcmeCloud.")
+    calls = call_llm()
+
+    text, error = post_processing_mod.apply("acme cloud is down", {"skill": "team-terms", "prompt": "Ignored."})
+
+    assert (text, error) == ("cleaned text", None)
+    system, user = calls[0]["messages"]
+    assert system["content"] == (
+        "Spell our product as AcmeCloud.\n\n" + post_processing_mod.SKILL_DATA_GUARD
+    )
+    assert "Ignored." not in system["content"]
+    # The transcript stays delimited data whichever instructions apply.
+    assert user["content"].endswith("<transcript>\nacme cloud is down\n</transcript>")
+
+
+def test_unset_skill_keeps_the_existing_messages(post_processing_mod, call_llm):
+    calls = call_llm()
+
+    post_processing_mod.apply("hello", {"skill": None, "prompt": "Only fix casing."})
+    post_processing_mod.apply("hello", {})
+
+    assert calls[0]["messages"] == post_processing_mod.build_messages("hello", "Only fix casing.")
+    assert calls[1]["messages"] == post_processing_mod.build_messages("hello", post_processing_mod.DEFAULT_PROMPT)
+
+
+@pytest.mark.parametrize("skill", ["missing-skill", "", "../etc/passwd", "https://example.com/SKILL.md"])
+def test_a_configured_skill_that_cannot_load_keeps_the_raw_transcript(
+    post_processing_mod, call_llm, skill_roots, skill
+):
+    calls = call_llm()
+
+    text, error = post_processing_mod.apply("raw words", {"skill": skill, "prompt": "Would be wrong to use."})
+
+    assert text == "raw words"
+    assert error.startswith("post_processing.skill: ")
+    assert calls == []
+
+
+@pytest.mark.parametrize("transcript,cfg", [("raw", {"enabled": False}), ("  ", {}), (None, {})])
+def test_disabled_or_empty_input_never_reads_the_skill(post_processing_mod, call_llm, monkeypatch, transcript, cfg):
+    def _must_not_load(reference):
+        raise AssertionError("skill was read")
+
+    monkeypatch.setattr(post_processing_mod.skill_source, "load_instructions", _must_not_load)
+    calls = call_llm()
+
+    text, error = post_processing_mod.apply(transcript, {**cfg, "skill": "team-terms"})
+
+    assert (text, error) == (transcript, None)
+    assert calls == []
+
+
+@pytest.mark.parametrize("skill", ["/denied/x", "/denied/x/SKILL.md"])
+def test_a_stat_permission_error_keeps_the_raw_transcript(post_processing_mod, call_llm, stat_denied, skill):
+    stat_denied("/denied")
+    calls = call_llm()
+
+    text, error = post_processing_mod.apply("hello world", {"skill": skill})
+
+    assert text == "hello world"
+    assert error.startswith("post_processing.skill: ") and "Permission denied" in error
+    assert calls == []
+
+
+def test_an_inaccessible_skill_root_keeps_the_raw_transcript(post_processing_mod, call_llm, skill_roots, stat_denied):
+    (profile, _external), _ = skill_roots
+    stat_denied(profile, methods=("is_dir",))
+    calls = call_llm()
+
+    text, error = post_processing_mod.apply("hello world", {"skill": "cleanup"})
+
+    assert text == "hello world"
+    assert "Permission denied" in error
+    assert calls == []

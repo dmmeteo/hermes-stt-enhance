@@ -618,3 +618,52 @@ def test_parakeet_post_processing_runs_on_the_merged_transcript(
     assert result["chunks"] == 2
     assert result["transcript"] == "Hello there and welcome."
     assert "hello there and welcome" in llm_calls[0]["messages"][1]["content"]
+
+
+def test_unloadable_skill_returns_the_raw_transcript_with_a_visible_error(
+    provider, hermes_config, local_whisper, call_llm, skill_roots
+):
+    hermes_config({"stt": {"local_llm_polished": {"post_processing": {"skill": "not-installed"}}}})
+    local_whisper({"success": True, "transcript": "raw transcript"})
+    calls = call_llm()
+
+    result = provider.transcribe("/tmp/voice.ogg")
+
+    assert result["success"] is True
+    assert result["transcript"] == "raw transcript"
+    assert result["post_processing_applied"] is False
+    assert "not-installed" in result["post_processing_error"]
+    assert calls == []
+
+
+def test_inaccessible_skill_path_keeps_the_asr_transcript(
+    provider, hermes_config, local_whisper, call_llm, stat_denied
+):
+    stat_denied("/denied")
+    hermes_config({"stt": {"local_llm_polished": {"post_processing": {"skill": "/denied/x/SKILL.md"}}}})
+    local_whisper({"success": True, "transcript": "raw transcript"})
+    calls = call_llm()
+
+    result = provider.transcribe("/tmp/voice.ogg")
+
+    assert result["success"] is True
+    assert result["transcript"] == "raw transcript"
+    assert result["post_processing_applied"] is False
+    assert "Permission denied" in result["post_processing_error"]
+    assert calls == []
+
+
+def test_inaccessible_skill_root_keeps_the_asr_transcript(
+    provider, hermes_config, local_whisper, call_llm, skill_roots, stat_denied
+):
+    (profile, _external), _ = skill_roots
+    stat_denied(profile, methods=("is_dir",))
+    hermes_config({"stt": {"local_llm_polished": {"post_processing": {"skill": "cleanup"}}}})
+    local_whisper({"success": True, "transcript": "raw transcript"})
+    call_llm()
+
+    result = provider.transcribe("/tmp/voice.ogg")
+
+    assert result["success"] is True
+    assert result["transcript"] == "raw transcript"
+    assert "Permission denied" in result["post_processing_error"]

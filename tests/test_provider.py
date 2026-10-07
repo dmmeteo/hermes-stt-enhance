@@ -653,3 +653,16 @@ def test_inaccessible_skill_root_keeps_the_asr_transcript(
     assert result["success"] is True
     assert result["transcript"] == "raw transcript"
     assert "Permission denied" in result["post_processing_error"]
+
+
+def test_unmigrated_config_makes_no_llm_call(provider, hermes_config, local_whisper, call_llm):
+    hermes_config({"stt": {"stt_enhance": {}, "local_llm_polished": {"post_processing": {"enabled": False}}}})
+    local_whisper({"success": True, "transcript": "raw"})
+    llm_calls = call_llm(reply="Cleaned.")
+
+    result = provider.transcribe("/tmp/voice.ogg")
+
+    assert result["success"] is False
+    assert "migrate_config.py" in result["error"]
+    assert llm_calls == []
+    assert provider.is_available() is False

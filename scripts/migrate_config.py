@@ -15,7 +15,9 @@ alone:
 It refuses rather than guesses when an old and a new key both exist with
 different values. Running it twice is a no-op; ``--rollback`` applies the
 inverse identity mapping (prototype stage names are not restored — 0.4.0 reads
-``post_processing`` too).
+``post_processing`` too). Comments outside the renamed blocks are kept; the
+renamed blocks move to the end of their parent mapping and lose comments inside
+them. Each write leaves a timestamped 0600 backup next to the file.
 
     python scripts/migrate_config.py ~/.hermes/config.yaml --check
     python scripts/migrate_config.py ~/.hermes/config.yaml           # writes, keeps a backup
@@ -28,6 +30,7 @@ comment-preserving ``atomic_config_write``.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import os
 import shutil
@@ -91,8 +94,10 @@ def _migrate_stage_names(block: Dict[str, Any], changes: List[str]) -> None:
     if not present:
         return
     if "post_processing" in block or len(present) > 1:
+        used = "post_processing" if "post_processing" in block else present[0]
         raise MigrationConflict(
-            f"stt.{NEW_PROVIDER} has {', '.join(present)} next to another post-processing block; keep one by hand"
+            f"stt.{OLD_PROVIDER} has several post-processing blocks; 0.4 used {used!r} and ignored the rest. "
+            f"Delete the others by hand, then re-run."
         )
     block["post_processing"] = block.pop(present[0])
     changes.append(f"stt.{NEW_PROVIDER}.{present[0]} -> stt.{NEW_PROVIDER}.post_processing")
@@ -130,11 +135,22 @@ def migrate(config: Dict[str, Any], *, rollback: bool = False) -> Tuple[Dict[str
     return data, changes
 
 
-def _backup(path: Path) -> Path:
-    backup = path.with_name(f"{path.name}.pre-stt-enhance-{time.strftime('%Y%m%dT%H%M%S')}")
-    shutil.copy2(path, backup)
-    os.chmod(backup, 0o600)
+def _backup(path: Path, label: str) -> Path:
+    stamp = time.strftime("%Y%m%dT%H%M%S") + f"{time.time_ns() % 1_000_000_000:09d}"
+    backup = path.with_name(f"{path.name}.{label}-{stamp}")
+    with open(path, "rb") as src, open(backup, "xb") as dst:
+        os.fchmod(dst.fileno(), 0o600)
+        shutil.copyfileobj(src, dst)
     return backup
+
+
+def _config_lock(path: Path):
+    """Hermes' cross-process lock for config read-modify-write, when this Hermes has it."""
+    try:
+        from hermes_cli.plugins_state import _locked_plugin_state
+    except ImportError:
+        return contextlib.nullcontext()
+    return _locked_plugin_state(path)
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -147,19 +163,20 @@ def main(argv: List[str] | None = None) -> int:
     from hermes_cli.config import atomic_config_write, read_user_config_raw
 
     path = args.config.expanduser().resolve()
-    migrated, changes = migrate(read_user_config_raw(path), rollback=args.rollback)
-    for change in changes:
-        print(f"{path}: {change}")
-    if not changes:
-        print(f"{path}: nothing to migrate")
-        return 0
-    if args.check:
-        return 1
-
-    mode = stat.S_IMODE(path.stat().st_mode)
-    print(f"{path}: backup at {_backup(path)}")
-    atomic_config_write(path, migrated)
-    os.chmod(path, mode)
+    with _config_lock(path):
+        migrated, changes = migrate(read_user_config_raw(path), rollback=args.rollback)
+        for change in changes:
+            print(f"{path}: {change}")
+        if not changes:
+            print(f"{path}: nothing to migrate")
+            return 0
+        if args.check:
+            return 1
+        mode = stat.S_IMODE(path.stat().st_mode)
+        backup = _backup(path, "pre-stt-enhance-rollback" if args.rollback else "pre-stt-enhance")
+        print(f"{path}: backup at {backup}")
+        atomic_config_write(path, migrated)
+        os.chmod(path, mode)
     return 0
 
 

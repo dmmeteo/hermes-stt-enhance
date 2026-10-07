@@ -44,6 +44,12 @@ DEFAULT_AUDIO_SPEED = {
 MIN_AUDIO_SPEED = 0.5
 MAX_AUDIO_SPEED = 3.0
 
+# 0.4.x names, read by nothing. Ignoring them would quietly drop the user's
+# post-processing settings (and turn the pass back on with defaults), so their
+# presence fails closed until scripts/migrate_config.py has renamed them.
+UNMIGRATED_STT_KEYS = ("local_llm_polished",)
+UNMIGRATED_STAGE_KEYS = ("polish", "repair")
+
 PARAKEET_MODEL_PATH_ENV = "HERMES_PARAKEET_MODEL_PATH"
 
 # Checked in order when neither config nor env var names a model directory.
@@ -327,8 +333,20 @@ def load_settings(
     model: Optional[str] = None,
     language: Optional[str] = None,
 ) -> Settings:
-    """Merge call arguments, provider config and ``stt.local`` fallbacks."""
+    """Merge call arguments, provider config and ``stt.local`` fallbacks.
+
+    Raises:
+        ConfigError: the config still carries 0.4.x key names.
+    """
     provider_cfg = _as_dict(stt_config.get(PROVIDER_NAME))
+    unmigrated = [f"stt.{key}" for key in UNMIGRATED_STT_KEYS if key in stt_config] + [
+        f"stt.{PROVIDER_NAME}.{key}" for key in UNMIGRATED_STAGE_KEYS if key in provider_cfg
+    ]
+    if unmigrated:
+        raise ConfigError(
+            f"{', '.join(unmigrated)} uses a pre-0.5 name and is not read; "
+            "rename it with scripts/migrate_config.py"
+        )
     backend = normalize_backend(provider_cfg.get("backend"))
     parakeet_cfg = _as_dict(provider_cfg.get(BACKEND_PARAKEET))
 

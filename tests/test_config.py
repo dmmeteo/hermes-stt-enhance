@@ -185,11 +185,17 @@ def test_chunking_can_be_disabled(config_mod):
     assert config_mod.ChunkingConfig.from_dict({"enabled": "off"}).enabled is False
 
 
-def test_only_the_post_processing_block_is_read(config_mod):
-    """Prototype stage names are migrated by scripts/migrate_config.py, not read."""
-    settings = config_mod.load_settings({"stt_enhance": {"polish": {"model": "b"}}})
-
-    assert settings.post_processing == {}
+@pytest.mark.parametrize(
+    "stt,named",
+    [
+        ({"stt_enhance": {"polish": {"enabled": False}}}, "stt.stt_enhance.polish"),
+        ({"stt_enhance": {"repair": {"provider": "local"}}}, "stt.stt_enhance.repair"),
+        ({"local_llm_polished": {"post_processing": {"enabled": False}}}, "stt.local_llm_polished"),
+    ],
+)
+def test_unmigrated_names_fail_closed_instead_of_falling_back_to_defaults(config_mod, stt, named):
+    with pytest.raises(config_mod.ConfigError, match=named.replace(".", r"\.")):
+        config_mod.load_settings(stt)
 
 
 # ---------------------------------------------------------------------------

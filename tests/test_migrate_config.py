@@ -146,7 +146,37 @@ def test_an_unrelated_provider_is_left_alone():
 def test_migrated_block_resolves_to_the_same_settings(config_mod):
     old = _legacy_config()
     new, _ = mc.migrate(old)
-    renamed_old_stt = {**old["stt"], "stt_enhance": old["stt"]["local_llm_polished"]}
+    renamed_old_stt = {k: v for k, v in old["stt"].items() if k != "local_llm_polished"}
+    renamed_old_stt["stt_enhance"] = old["stt"]["local_llm_polished"]
 
     assert config_mod.load_settings(new["stt"]) == config_mod.load_settings(renamed_old_stt)
     assert config_mod.load_settings(new["stt"]).post_processing == POST_PROCESSING
+
+
+def test_cli_writes_once_with_a_private_backup_and_keeps_the_mode(tmp_path, monkeypatch, capsys):
+    import sys
+    import types
+
+    import yaml
+
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(_legacy_config()))
+    path.chmod(0o640)
+    fake = types.ModuleType("hermes_cli.config")
+    fake.read_user_config_raw = lambda p: yaml.safe_load(p.read_text())
+    fake.atomic_config_write = lambda p, data: p.write_text(yaml.safe_dump(data))
+    monkeypatch.setitem(sys.modules, "hermes_cli", types.ModuleType("hermes_cli"))
+    monkeypatch.setitem(sys.modules, "hermes_cli.config", fake)
+
+    assert mc.main([str(path), "--check"]) == 1
+    assert yaml.safe_load(path.read_text()) == _legacy_config()
+    assert mc.main([str(path)]) == 0
+    assert mc.main([str(path)]) == 0
+
+    backups = list(tmp_path.glob("config.yaml.pre-stt-enhance-*"))
+    assert len(backups) == 1
+    assert backups[0].stat().st_mode & 0o777 == 0o600
+    assert yaml.safe_load(backups[0].read_text()) == _legacy_config()
+    assert path.stat().st_mode & 0o777 == 0o640
+    assert yaml.safe_load(path.read_text()) == mc.migrate(_legacy_config())[0]
+    assert "nothing to migrate" in capsys.readouterr().out

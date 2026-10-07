@@ -134,14 +134,22 @@ hermes gateway restart      # hermes -p developer gateway restart for a profile
 
 ### Upgrading from `local-llm-polished` (0.4.x)
 
-0.5.0 renamed the plugin to `hermes-stt-enhance`, the provider and config block to `stt_enhance`, and the auxiliary LLM task to `stt_enhance`. Settings and behaviour are unchanged, but 0.5.0 no longer reads the old names. Rename a profile's config with Hermes' interpreter (keeps comments, writes a backup next to the file, refuses on conflicting old/new keys, safe to re-run; `--rollback` reverses it):
+0.5.0 renamed the plugin to `hermes-stt-enhance`, the provider and config block to `stt_enhance`, and the auxiliary LLM task to `stt_enhance`. Settings and behaviour are unchanged, but 0.5.0 does not read the old names. A config that still has them fails closed with an error naming the key, so it never falls back to defaults. `hermes plugins update` cannot follow the rename, so reinstall the plugin and migrate each profile's config:
 
 ```bash
-~/.hermes/hermes-agent/venv/bin/python scripts/migrate_config.py ~/.hermes/config.yaml --check
-~/.hermes/hermes-agent/venv/bin/python scripts/migrate_config.py ~/.hermes/config.yaml
+hermes gateway stop                      # once per profile: no writer races the migration
+git clone https://github.com/dmmeteo/hermes-stt-enhance && cd hermes-stt-enhance
+PY=~/.hermes/hermes-agent/venv/bin/python   # Hermes' interpreter: the script writes through Hermes' own config writer
+$PY scripts/migrate_config.py ~/.hermes/config.yaml --check     # and ~/.hermes/profiles/<name>/config.yaml
+$PY scripts/migrate_config.py ~/.hermes/config.yaml
+hermes plugins remove local-llm-polished
+hermes plugins install dmmeteo/hermes-stt-enhance#hermes-stt-enhance
+hermes gateway start
 ```
 
-It maps `stt.provider`, `stt.local_llm_polished` (and the prototype `polish:`/`repair:` stage names) to `stt.stt_enhance.post_processing`, `auxiliary.stt_polish`, and the `plugins.enabled`/`disabled`/`entries` keys. Then replace the installed `plugins/local-llm-polished` directory with `plugins/hermes-stt-enhance` and restart the gateway. The Parakeet runtime moves to `~/.hermes/plugin-runtimes/hermes-stt-enhance/`; copy the old directory there to skip a reinstall.
+The script renames `stt.provider`, `stt.local_llm_polished` to `stt.stt_enhance` (the prototype `polish:`/`repair:` stage names become `post_processing:`), `auxiliary.stt_polish`, and the `plugins.enabled`/`disabled`/`entries` keys. Entries keyed `local-llm-polished` or `hermes-local-llm-polished/local-llm-polished` become `hermes-stt-enhance`, which is the key of a plugin installed as `plugins/hermes-stt-enhance`. It refuses when an old and a new key disagree, is safe to re-run, and `--rollback` reverses it. Each write leaves a timestamped 0600 backup next to the file. Comments elsewhere in the file are kept, but the renamed blocks move to the end of their parent and lose any comments inside them.
+
+The Parakeet runtime directory is now `~/.hermes/plugin-runtimes/hermes-stt-enhance/`. To skip the reinstall, copy `plugin-runtimes/local-llm-polished/*` into it. The location override is now `HERMES_STT_ENHANCE_RUNTIME_ROOT`; `HERMES_LLM_POLISHED_RUNTIME_ROOT` is no longer read.
 
 ## Dependencies
 

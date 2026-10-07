@@ -101,7 +101,13 @@ platform the plugin supports.
 
 Runtime installs stay under the user's control:
 
-- `security.allow_lazy_installs: false` (Hermes-wide) blocks provisioning.
+- Hermes-wide, provisioning needs `security.allow_lazy_installs: true` set
+  in the user's `config.yaml` and in Hermes' effective config
+  (`hermes_cli.config.load_config_readonly()`). Hermes' built-in default of
+  `true` does not count. False, unset, non-boolean (`"false"`, `1`), or an
+  unreadable or malformed config file blocks it, and so does Hermes'
+  sealed-environment switch `HERMES_DISABLE_LAZY_INSTALLS=1`. A `true`
+  pinned only by a managed config does not count either.
 - `stt.stt_enhance.parakeet.auto_install_deps: false` blocks it for this
   plugin only.
 

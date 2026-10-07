@@ -72,9 +72,6 @@ def test_the_installer_is_pinned_to_the_running_interpreter(
     some other interpreter that happened to be nearby.
     """
     lock = faux_lock()
-    fake_managed_uv = type(sys)("hermes_cli.managed_uv")
-    fake_managed_uv.resolve_uv = lambda: "/usr/bin/uv"
-    monkeypatch.setitem(sys.modules, "hermes_cli.managed_uv", fake_managed_uv)
     monkeypatch.setattr(runtime_deps_mod.shutil, "which", lambda name: "/usr/bin/uv")
 
     command = runtime_deps_mod._installer_command(tmp_path, runtime_deps_mod.lock_specs(lock))
@@ -90,7 +87,6 @@ def test_the_installer_falls_back_to_pip_in_the_same_interpreter(
 ):
     lock = faux_lock()
     monkeypatch.setattr(runtime_deps_mod.shutil, "which", lambda name: None)
-    monkeypatch.setitem(sys.modules, "hermes_cli.managed_uv", None)
 
     command = runtime_deps_mod._installer_command(tmp_path, runtime_deps_mod.lock_specs(lock))
 
@@ -516,7 +512,6 @@ def test_missing_dependencies_are_never_a_silent_false(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="regression: calls the retired resolve_uv shim")
 @pytest.mark.parametrize("uv_on_path", ["/opt/bin/uv", None])
 def test_the_installer_never_calls_the_retired_uv_shim(
     runtime_deps_mod, faux_lock, retired_internals, monkeypatch, tmp_path, uv_on_path
@@ -546,7 +541,6 @@ _DENYING_POLICIES = {
 }
 
 
-@pytest.mark.xfail(strict=True, reason="regression: policy read through retired probe, fails open")
 @pytest.mark.parametrize("config", _DENYING_POLICIES.values(), ids=_DENYING_POLICIES.keys())
 def test_only_an_explicit_true_policy_allows_installs(
     runtime_deps_mod, faux_lock, fake_installer, retired_internals, readonly_config, config
@@ -567,11 +561,10 @@ def test_only_an_explicit_true_policy_allows_installs(
     assert config == before
 
 
-@pytest.mark.xfail(strict=True, reason="regression: policy read through retired probe, fails open")
 @pytest.mark.parametrize(
     "failure",
-    [OSError("config unreadable"), ValueError("bad yaml"), None],
-    ids=["load-raises-oserror", "load-raises-valueerror", "loader-unavailable"],
+    [PermissionError("config unreadable"), ValueError("config has a formatting error"), None],
+    ids=["unreadable-file", "malformed-file", "loader-unavailable"],
 )
 def test_an_unreadable_policy_denies_installs(
     runtime_deps_mod, faux_lock, fake_installer, retired_internals, readonly_config,
@@ -582,7 +575,8 @@ def test_an_unreadable_policy_denies_installs(
     if failure is None:
         monkeypatch.delattr(sys.modules["hermes_cli.config"], "load_config_readonly", raising=False)
     else:
-        readonly_config(error=failure)
+        # Hermes serves its defaults (installs allowed) for a file it cannot parse.
+        readonly_config({"security": {"allow_lazy_installs": True}}, error=failure)
 
     assert runtime_deps_mod.installs_allowed() is False
     with pytest.raises(runtime_deps_mod.DependencyError):
@@ -592,7 +586,52 @@ def test_an_unreadable_policy_denies_installs(
     assert retired_internals == {"resolve_uv": 0, "_allow_lazy_installs": 0}
 
 
-@pytest.mark.xfail(strict=True, reason="regression: policy read through retired probe")
+@pytest.mark.parametrize(
+    ("effective", "user"),
+    [
+        ({"security": {"allow_lazy_installs": True}}, {}),
+        ({"security": {"allow_lazy_installs": True}}, {"security": {"redact_secrets": True}}),
+        ({"security": {"allow_lazy_installs": False}}, {"security": {"allow_lazy_installs": True}}),
+    ],
+    ids=["no-user-file-hermes-default", "key-unset-hermes-default", "overridden-to-false"],
+)
+def test_a_policy_the_user_did_not_set_to_true_denies_installs(
+    runtime_deps_mod, faux_lock, fake_installer, retired_internals, readonly_config,
+    effective, user
+):
+    """Hermes merges ``allow_lazy_installs: true`` in as a default.
+
+    Inheriting that default is not an opt-in, and an effective false (an
+    overlay, a managed config) wins over the user's file.
+    """
+    lock = faux_lock()
+    recorder = fake_installer()
+    readonly_config(effective, user_config=user)
+
+    assert runtime_deps_mod.installs_allowed() is False
+    with pytest.raises(runtime_deps_mod.DependencyError):
+        runtime_deps_mod.ensure(auto_install=True, lock=lock)
+
+    assert recorder["calls"] == []
+
+
+@pytest.mark.parametrize("value", ["1", "true", " YES "])
+def test_hermes_sealed_environment_denies_installs_despite_an_explicit_true(
+    runtime_deps_mod, faux_lock, fake_installer, install_gate, monkeypatch, value
+):
+    """Hermes' Docker image and workers set HERMES_DISABLE_LAZY_INSTALLS."""
+    lock = faux_lock()
+    recorder = fake_installer()
+    install_gate()
+    monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", value)
+
+    assert runtime_deps_mod.installs_allowed() is False
+    with pytest.raises(runtime_deps_mod.DependencyError):
+        runtime_deps_mod.ensure(auto_install=True, lock=lock)
+
+    assert recorder["calls"] == []
+
+
 def test_an_explicit_true_policy_runs_the_installer(
     runtime_deps_mod, faux_lock, fake_installer, retired_internals, readonly_config
 ):
@@ -609,14 +648,13 @@ def test_an_explicit_true_policy_runs_the_installer(
 
 
 def test_a_denying_policy_still_uses_a_runtime_already_on_disk(
-    runtime_deps_mod, faux_lock, fake_installer, readonly_config, install_gate, restart_process
+    runtime_deps_mod, faux_lock, fake_installer, install_gate, restart_process
 ):
     lock = faux_lock()
     install_gate()
     recorder = fake_installer()
     runtime_deps_mod.ensure(auto_install=True, lock=lock)
     restart_process()
-    readonly_config({"security": {"allow_lazy_installs": False}})
     install_gate(allow=False)
 
     assert runtime_deps_mod.ensure(auto_install=True, lock=lock) == "runtime"

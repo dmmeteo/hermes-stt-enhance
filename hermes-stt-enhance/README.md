@@ -51,7 +51,7 @@ Local audio processing does **not** make the transcript private. What leaves the
 Everything else the plugin does that a user would want to know about:
 
 - **Shell commands.** `ffmpeg` and `ffprobe` run as subprocesses (with timeouts, stdin closed) when `audio_speed` is not `1.0`, when the Parakeet backend is selected, or to measure duration for chunking. The default faster-whisper configuration at speed `1.0` never shells out.
-- **Network and package installs (Parakeet only).** The first time the Parakeet backend runs, it installs the pinned `sherpa-onnx==1.13.4` and `numpy==2.4.3` from PyPI with `uv pip` (or `pip`) into a plugin-owned directory. Turn this off with `parakeet.auto_install_deps: false` or Hermes-wide `security.allow_lazy_installs: false`. The faster-whisper backend installs nothing; Hermes itself may download the faster-whisper model on first use, as it does for its built-in `local` provider.
+- **Network and package installs (Parakeet only).** The first time the Parakeet backend runs, it installs the pinned `sherpa-onnx==1.13.4` and `numpy==2.4.3` from PyPI with `uv pip` (or `pip`) into a plugin-owned directory, only when your Hermes `config.yaml` sets `security.allow_lazy_installs: true` explicitly (Hermes' built-in default does not count). An unset, false, malformed or unreadable setting blocks the install, as does `parakeet.auto_install_deps: false`. The faster-whisper backend installs nothing; Hermes itself may download the faster-whisper model on first use, as it does for its built-in `local` provider.
 - **Files read outside the plugin.** Hermes' STT config, the audio file Hermes hands over, the `SKILL.md` named by `post_processing.skill` (instruction body only, at most 64 KiB, never executed), and the Parakeet model files (`parakeet.model_path`, `$HERMES_PARAKEET_MODEL_PATH`, or the default directories listed under [Parakeet setup](#parakeet-setup)).
 - **Files written.** A temporary working directory per transcription (removed afterwards), and, for Parakeet only, the dependency runtime under `~/.hermes/plugin-runtimes/hermes-stt-enhance/`.
 - **No** tools, hooks, background processes, telemetry or self-updating code. Concurrent Parakeet decodes are limited in-process; nothing outlives the Hermes process.
@@ -209,7 +209,7 @@ stt:
       auto_install_deps: false
 ```
 
-Hermes-wide, `security.allow_lazy_installs: false` has the same effect. Full design, integrity model, and air-gapped instructions: [docs/dependency-model.md](../docs/dependency-model.md). The gap in Hermes' own plugin API and a proposal to close it: [docs/hermes-core-proposal.md](../docs/hermes-core-proposal.md).
+Hermes-wide, anything but an explicit `security.allow_lazy_installs: true` has the same effect: the plugin fails closed when the setting is false, missing, malformed or unreadable. Full design, integrity model, and air-gapped instructions: [docs/dependency-model.md](../docs/dependency-model.md). The gap in Hermes' own plugin API and a proposal to close it: [docs/hermes-core-proposal.md](../docs/hermes-core-proposal.md).
 
 ## Parakeet setup
 

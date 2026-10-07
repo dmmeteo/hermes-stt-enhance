@@ -297,16 +297,15 @@ def no_sherpa(monkeypatch):
 
 
 @pytest.fixture
-def install_gate(monkeypatch):
-    """Stand in for Hermes' ``security.allow_lazy_installs`` gate."""
+def install_gate(readonly_config, retired_internals):
+    """Set Hermes' ``security.allow_lazy_installs`` policy.
+
+    The retired internals stay poisoned underneath, so a test that passes
+    cannot be leaning on them.
+    """
 
     def _set(allow=True):
-        module = _make_module("tools.lazy_deps", _allow_lazy_installs=lambda: allow)
-        monkeypatch.setitem(sys.modules, "tools.lazy_deps", module)
-        # ``from tools import lazy_deps`` may otherwise return a package
-        # attribute cached by a real Hermes import before this fixture ran.
-        monkeypatch.setattr(sys.modules["tools"], "lazy_deps", module, raising=False)
-        return module
+        return readonly_config({"security": {"allow_lazy_installs": allow}})
 
     return _set
 
@@ -340,19 +339,35 @@ def retired_internals(monkeypatch):
     return calls
 
 
+_SAME_AS_EFFECTIVE = object()
+
+
 @pytest.fixture
 def readonly_config(monkeypatch):
-    """Set what ``hermes_cli.config.load_config_readonly`` returns, or raises."""
+    """Set the config Hermes serves to the install policy check.
 
-    def _set(config=None, *, error=None):
+    ``config`` is what ``load_config_readonly`` returns: the effective view,
+    with Hermes' defaults merged in. ``user_config`` is the user's own file, as
+    ``require_readable_config_before_write`` returns it; it defaults to the
+    same mapping. ``error`` makes the user file unreadable or malformed.
+    """
+
+    def _set(config=None, *, user_config=_SAME_AS_EFFECTIVE, error=None):
+        user = config if user_config is _SAME_AS_EFFECTIVE else user_config
+
         def load_config_readonly():
-            if error is not None:
-                raise error
             return config
 
+        def require_readable_config_before_write():
+            if error is not None:
+                raise error
+            return user
+
+        module = sys.modules["hermes_cli.config"]
+        monkeypatch.setattr(module, "load_config_readonly", load_config_readonly, raising=False)
         monkeypatch.setattr(
-            sys.modules["hermes_cli.config"], "load_config_readonly", load_config_readonly,
-            raising=False,
+            module, "require_readable_config_before_write",
+            require_readable_config_before_write, raising=False,
         )
         return config
 
@@ -369,6 +384,8 @@ def _isolate_runtime_path(monkeypatch, tmp_path_factory):
     """
     root = tmp_path_factory.mktemp("plugin-runtimes")
     monkeypatch.setenv("HERMES_STT_ENHANCE_RUNTIME_ROOT", str(root))
+    # A sealed host (Hermes' Docker image) would otherwise deny every install.
+    monkeypatch.delenv("HERMES_DISABLE_LAZY_INSTALLS", raising=False)
     before_path = list(sys.path)
     before_modules = set(sys.modules)
     yield root

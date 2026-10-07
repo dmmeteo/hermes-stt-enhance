@@ -44,8 +44,8 @@ import and report the backend unavailable — it cannot shadow or break core.
 This mirrors Hermes' own durable lazy-install target
 (``tools.lazy_deps._activate_target_on_syspath``).
 
-Runtime installs stay gated by ``security.allow_lazy_installs`` and by this
-plugin's ``stt.stt_enhance.parakeet.auto_install_deps``.
+Runtime installs need an explicit ``security.allow_lazy_installs: true`` in
+Hermes' config and this plugin's ``stt.stt_enhance.parakeet.auto_install_deps``.
 """
 
 from __future__ import annotations
@@ -373,22 +373,37 @@ def previous_runtimes(
 
 
 def installs_allowed() -> bool:
-    """Best-effort read of Hermes' runtime-install gate.
+    """Read Hermes' ``security.allow_lazy_installs`` policy. Fails closed.
 
-    There is no public query for it, so an unreadable gate is treated as open;
-    this only decides whether the plugin calls the backend recoverable.
+    A runtime install needs the user's config file to set the policy to the
+    boolean ``true`` *and* Hermes' effective config (``load_config_readonly``)
+    to agree. Hermes merges ``true`` in as a default and serves that default
+    for a file it cannot parse, so the effective view alone cannot tell an
+    opt-in from a broken or silent config. Unreadable, malformed, unset or
+    non-boolean policy denies, as does running outside Hermes or Hermes'
+    sealed-environment switch ``HERMES_DISABLE_LAZY_INSTALLS``. Neither config
+    view is modified.
     """
+    if os.environ.get("HERMES_DISABLE_LAZY_INSTALLS", "").strip().lower() in ("1", "true", "yes"):
+        return False
     try:
-        from tools import lazy_deps
+        from hermes_cli.config import (
+            load_config_readonly,
+            require_readable_config_before_write,
+        )
+
+        # Never writes config.yaml. It raises where the loader would serve
+        # defaults for a broken file (Hermes may still back that file up).
+        user_config = require_readable_config_before_write()
+        effective_config = load_config_readonly()
     except Exception:
-        return True  # not running under Hermes — nothing gates us
-    probe = getattr(lazy_deps, "_allow_lazy_installs", None)
-    if probe is None:
-        return True
-    try:
-        return bool(probe())
-    except Exception:
-        return True
+        return False
+    return _allows_lazy_installs(user_config) and _allows_lazy_installs(effective_config)
+
+
+def _allows_lazy_installs(config: Any) -> bool:
+    security = config.get("security") if isinstance(config, dict) else None
+    return isinstance(security, dict) and security.get("allow_lazy_installs") is True
 
 
 def _installer_env() -> Dict[str, str]:
@@ -407,14 +422,7 @@ def _installer_env() -> Dict[str, str]:
 
 def _installer_command(stage: Path, specs: Sequence[str]) -> List[str]:
     """Prefer uv (fast, no pip needed in the venv), fall back to pip."""
-    uv_bin = None
-    try:
-        from hermes_cli.managed_uv import resolve_uv
-
-        uv_bin = resolve_uv()
-    except Exception:
-        uv_bin = None
-    uv_bin = uv_bin or shutil.which("uv")
+    uv_bin = shutil.which("uv")
     if uv_bin:
         # ``--python`` is not optional: uv otherwise discovers an interpreter
         # from the working directory, and it resolves wheels for whichever one

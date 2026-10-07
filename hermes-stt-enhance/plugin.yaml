@@ -1,5 +1,5 @@
 name: hermes-stt-enhance
-version: 0.5.0
+version: 0.5.1
 requires_hermes: ">=0.15.0"
 description: >-
   Local STT with two interchangeable backends (faster-whisper or sherpa-onnx

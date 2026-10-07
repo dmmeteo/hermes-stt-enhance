@@ -14,6 +14,7 @@ and multi-profile sharing.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -508,6 +509,118 @@ def test_missing_dependencies_are_never_a_silent_false(
 
     warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert any(runtime_deps_mod.manual_install_command(lock) in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Retired Hermes internals and the security.allow_lazy_installs policy
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(strict=True, reason="regression: calls the retired resolve_uv shim")
+@pytest.mark.parametrize("uv_on_path", ["/opt/bin/uv", None])
+def test_the_installer_never_calls_the_retired_uv_shim(
+    runtime_deps_mod, faux_lock, retired_internals, monkeypatch, tmp_path, uv_on_path
+):
+    lock = faux_lock()
+    monkeypatch.setattr(runtime_deps_mod.shutil, "which", lambda name: uv_on_path)
+
+    command = runtime_deps_mod._installer_command(tmp_path, runtime_deps_mod.lock_specs(lock))
+
+    assert retired_internals["resolve_uv"] == 0
+    if uv_on_path:
+        assert command[:3] == [uv_on_path, "pip", "install"]
+    else:
+        assert command[:4] == [sys.executable, "-m", "pip", "install"]
+
+
+_DENYING_POLICIES = {
+    "explicit-false": {"security": {"allow_lazy_installs": False}},
+    "missing-key": {"security": {}},
+    "missing-section": {},
+    "null": {"security": {"allow_lazy_installs": None}},
+    "string-false": {"security": {"allow_lazy_installs": "false"}},
+    "string-true": {"security": {"allow_lazy_installs": "true"}},
+    "integer-one": {"security": {"allow_lazy_installs": 1}},
+    "section-not-a-mapping": {"security": "on"},
+    "config-not-a-mapping": ["security"],
+}
+
+
+@pytest.mark.xfail(strict=True, reason="regression: policy read through retired probe, fails open")
+@pytest.mark.parametrize("config", _DENYING_POLICIES.values(), ids=_DENYING_POLICIES.keys())
+def test_only_an_explicit_true_policy_allows_installs(
+    runtime_deps_mod, faux_lock, fake_installer, retired_internals, readonly_config, config
+):
+    lock = faux_lock()
+    recorder = fake_installer()
+    readonly_config(config)
+    before = copy.deepcopy(config)
+
+    assert runtime_deps_mod.installs_allowed() is False
+    assert runtime_deps_mod.can_provide(auto_install=True, lock=lock) is False
+    with pytest.raises(runtime_deps_mod.DependencyError) as exc:
+        runtime_deps_mod.ensure(auto_install=True, lock=lock)
+
+    assert "allow_lazy_installs" in str(exc.value)
+    assert recorder["calls"] == []
+    assert retired_internals == {"resolve_uv": 0, "_allow_lazy_installs": 0}
+    assert config == before
+
+
+@pytest.mark.xfail(strict=True, reason="regression: policy read through retired probe, fails open")
+@pytest.mark.parametrize(
+    "failure",
+    [OSError("config unreadable"), ValueError("bad yaml"), None],
+    ids=["load-raises-oserror", "load-raises-valueerror", "loader-unavailable"],
+)
+def test_an_unreadable_policy_denies_installs(
+    runtime_deps_mod, faux_lock, fake_installer, retired_internals, readonly_config,
+    monkeypatch, failure
+):
+    lock = faux_lock()
+    recorder = fake_installer()
+    if failure is None:
+        monkeypatch.delattr(sys.modules["hermes_cli.config"], "load_config_readonly", raising=False)
+    else:
+        readonly_config(error=failure)
+
+    assert runtime_deps_mod.installs_allowed() is False
+    with pytest.raises(runtime_deps_mod.DependencyError):
+        runtime_deps_mod.ensure(auto_install=True, lock=lock)
+
+    assert recorder["calls"] == []
+    assert retired_internals == {"resolve_uv": 0, "_allow_lazy_installs": 0}
+
+
+@pytest.mark.xfail(strict=True, reason="regression: policy read through retired probe")
+def test_an_explicit_true_policy_runs_the_installer(
+    runtime_deps_mod, faux_lock, fake_installer, retired_internals, readonly_config
+):
+    lock = faux_lock()
+    recorder = fake_installer()
+    config = readonly_config({"security": {"allow_lazy_installs": True}})
+    before = copy.deepcopy(config)
+
+    assert runtime_deps_mod.ensure(auto_install=True, lock=lock) == "installed"
+
+    assert len(recorder["calls"]) == 1
+    assert retired_internals == {"resolve_uv": 0, "_allow_lazy_installs": 0}
+    assert config == before
+
+
+def test_a_denying_policy_still_uses_a_runtime_already_on_disk(
+    runtime_deps_mod, faux_lock, fake_installer, readonly_config, install_gate, restart_process
+):
+    lock = faux_lock()
+    install_gate()
+    recorder = fake_installer()
+    runtime_deps_mod.ensure(auto_install=True, lock=lock)
+    restart_process()
+    readonly_config({"security": {"allow_lazy_installs": False}})
+    install_gate(allow=False)
+
+    assert runtime_deps_mod.ensure(auto_install=True, lock=lock) == "runtime"
+    assert len(recorder["calls"]) == 1
 
 
 # ---------------------------------------------------------------------------

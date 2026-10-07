@@ -311,6 +311,54 @@ def install_gate(monkeypatch):
     return _set
 
 
+@pytest.fixture
+def retired_internals(monkeypatch):
+    """Poisoned stand-ins for Hermes internals the plugin must not touch.
+
+    On current Hermes ``hermes_cli.managed_uv.resolve_uv`` is a retired updater
+    shim that raises ``SystemExit``, and ``tools.lazy_deps._allow_lazy_installs``
+    is gone. The stand-ins record every call; the uv one exits like the real
+    shim, and the gate one answers "allowed" so consulting it cannot pass for
+    honouring the policy. Neither runs an updater or installs anything.
+    """
+    calls = {"resolve_uv": 0, "_allow_lazy_installs": 0}
+
+    def resolve_uv(*args, **kwargs):
+        calls["resolve_uv"] += 1
+        raise SystemExit("retired updater shim called")
+
+    def _allow_lazy_installs():
+        calls["_allow_lazy_installs"] += 1
+        return True
+
+    managed_uv = _make_module("hermes_cli.managed_uv", resolve_uv=resolve_uv)
+    lazy_deps = _make_module("tools.lazy_deps", _allow_lazy_installs=_allow_lazy_installs)
+    monkeypatch.setitem(sys.modules, "hermes_cli.managed_uv", managed_uv)
+    monkeypatch.setitem(sys.modules, "tools.lazy_deps", lazy_deps)
+    monkeypatch.setattr(sys.modules["hermes_cli"], "managed_uv", managed_uv, raising=False)
+    monkeypatch.setattr(sys.modules["tools"], "lazy_deps", lazy_deps, raising=False)
+    return calls
+
+
+@pytest.fixture
+def readonly_config(monkeypatch):
+    """Set what ``hermes_cli.config.load_config_readonly`` returns, or raises."""
+
+    def _set(config=None, *, error=None):
+        def load_config_readonly():
+            if error is not None:
+                raise error
+            return config
+
+        monkeypatch.setattr(
+            sys.modules["hermes_cli.config"], "load_config_readonly", load_config_readonly,
+            raising=False,
+        )
+        return config
+
+    return _set
+
+
 @pytest.fixture(autouse=True)
 def _isolate_runtime_path(monkeypatch, tmp_path_factory):
     """Keep runtime activation from leaking between tests.

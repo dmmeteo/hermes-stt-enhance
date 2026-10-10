@@ -25,3 +25,7 @@ python -m pytest -q
 ## License
 
 MIT
+
+## For agents
+
+Coding agents start at [AGENTS.md](AGENTS.md).
